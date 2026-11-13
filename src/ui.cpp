@@ -14,7 +14,7 @@ StockFilter ui_filter;
 bool ui_compact = false;
 
 static lv_obj_t *scene;
-static lv_obj_t *img_bg, *img_chefe, *img_toolhead, *img_carriage, *img_part, *img_part_clip;
+static lv_obj_t *img_bg, *img_toolhead, *img_carriage, *img_part, *img_part_clip;
 static lv_obj_t *night, *error_veil;
 static lv_obj_t *bay_hl[4], *bay_num_bg[4], *bay_num[4], *bay_spool[4], *bay_plate[4], *bay_mat[4];
 static uint8_t *bay_recolor[4];
@@ -31,7 +31,6 @@ static lv_obj_t *confetti[16];
 static lv_obj_t *toast_box, *toast_lbl;
 static uint32_t toast_until = 0;
 
-static int anim_tick = 0;
 static int th_x = U1_TOOLHEAD_X;
 
 /* overlays */
@@ -379,10 +378,6 @@ static void update_bay(int i, const FeederChannel *c, bool on,
     }
 }
 
-static int feet_y(const lv_img_dsc_t *d) {
-    return FLOOR_Y - (d ? d->header.h : 0);
-}
-
 static void fmt_time(char *b, size_t n, float sec) {
     if (sec < 0) { snprintf(b, n, "--"); return; }
     int s = (int)(sec + 0.5f);
@@ -551,31 +546,8 @@ static void refresh_text(const PrinterSnapshot *s) {
     (void)lbl_hint;
 }
 
-static bool is_walk_state(PrinterState st) {
-    return st == PRINTER_PRINTING || st == PRINTER_HEATING || st == PRINTER_BUSY;
-}
-
 static void tick_anim(void) {
     const PrinterSnapshot *s = &ui_snap;
-    anim_tick++;
-    int breathe = 0;
-    if (s->state == PRINTER_IDLE || s->state == PRINTER_OFFLINE)
-        breathe = ((anim_tick / 5) % 2);
-
-    /* ----- operadora (estática em X; só troca de quadro) ----- */
-    const lv_img_dsc_t *cf;
-    if (s->state == PRINTER_ERROR) {
-        cf = img_operadora_susto[(anim_tick / 2) % 2];
-    } else if (s->state == PRINTER_COMPLETE) {
-        cf = img_operadora_celebra[anim_tick % 2];
-    } else if (is_walk_state(s->state) || s->state == PRINTER_PAUSED) {
-        cf = img_operadora_apresenta[(anim_tick / 6) % 2];
-    } else {
-        /* idle: cochila, com "respiração"/alternância suave */
-        cf = img_operadora_dorme[(anim_tick / 8) % 2];
-    }
-    lv_img_set_src(img_chefe, cf);
-    lv_obj_set_pos(img_chefe, OPERADORA_X, feet_y(cf) + breathe);
 
     /* carro + bico: posição atualizada em tick_toolhead (50 ms) */
 
@@ -831,7 +803,7 @@ static void build_bays(lv_obj_t *parent) {
     for (int i = 0; i < 4; i++) {
         int x = k_bay_x[i], w = k_bay_w[i];
         /* Gaveta inferior: widgets nos 4 compartimentos já pintados.
-         * A operadora é criada depois, então fica à frente. */
+         * Arte de fundo intacta; só os widgets dos 4 slots. */
         bay_hl[i] = lv_obj_create(parent);
         lv_obj_set_pos(bay_hl[i], x - 2, U1_SLOT_HL_Y);
         lv_obj_set_size(bay_hl[i], w + 4, U1_SLOT_HL_H);
@@ -938,7 +910,7 @@ void ui_init(void) {
     lv_obj_set_pos(img_bg, -SCENE_CROP_X, 0);
     lv_obj_clear_flag(img_bg, LV_OBJ_FLAG_CLICKABLE);
 
-    /* gaveta inferior (atrás dos personagens; baias do topo ficam na arte) */
+    /* gaveta inferior (baias do topo ficam na arte) */
     build_bays(scene);
 
     /* peça (clip de baixo para cima) */
@@ -988,12 +960,6 @@ void ui_init(void) {
     lv_obj_set_style_pad_all(error_veil, 0, 0);
     lv_obj_clear_flag(error_veil, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(error_veil, LV_OBJ_FLAG_HIDDEN);
-
-    /* operadora (estática; Bobina e o operário andando não entram) */
-    img_chefe = lv_img_create(scene);
-    lv_img_set_src(img_chefe, img_operadora_dorme[0]);
-    lv_obj_set_pos(img_chefe, OPERADORA_X, feet_y(img_operadora_dorme[0]));
-    lv_obj_clear_flag(img_chefe, LV_OBJ_FLAG_CLICKABLE);
 
     static const uint32_t conf_colors[4] = {COLOR_MINT, COLOR_GOLD, COLOR_ALERT, COLOR_CREAM};
     for (int i = 0; i < 16; i++) {

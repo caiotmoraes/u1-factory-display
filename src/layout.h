@@ -3,7 +3,7 @@
  * Fábrica v0.3: painel de dados à esquerda (400px) e cena animada à direita (400px). */
 #define SCREEN_W          800
 #define SCREEN_H          480
-#define FLOOR_Y           452          /* pés dos personagens (coords da cena) */
+#define FLOOR_Y           452          /* linha do chão da cena */
 
 #define PANEL_W           400
 #define SCENE_X           400
@@ -14,11 +14,6 @@
 #define HUD_Y             0
 #define HUD_W             400
 #define HUD_H             480
-
-/* Operadora (estática em X, só troca de quadro). 304 deixa a sprite
- * de 94 px inteira na cena de 400 (crop 206; a posição-mundo antiga
- * 538 cairia em 332 e sairia 26 px pela direita). */
-#define OPERADORA_X       304
 
 /* Quatro abas no canto direito: WIFI + FABRICA + ARMAZEM + DIARIO
  * (ecrãs cheios: armazém, diário, wifi, detalhes). */

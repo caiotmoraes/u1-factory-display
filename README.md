@@ -10,7 +10,7 @@ app [Spool Factory](https://github.com/caiotmoraes/spool-factory) e na máquina
 de estados do [klippyface](https://github.com/luke-kearney/klippyface).
 
 Nesta versão a cena da **fábrica** está completa (estados, HUD em português,
-operadora (estática), rolo ativo via Spoolman). O **armazém de estoque** é só um
+U1 centrada com cabeçote alinhado, rolo ativo via Spoolman). O **armazém de estoque** é só um
 placeholder: o mapeamento do app e a proposta de navegação touch estão
 documentados abaixo; **nenhuma escrita** no Spoolman ou na U1 foi implementada.
 
@@ -37,15 +37,20 @@ Macros da placa: `-DESP_PANEL_BOARD_DEFAULT_USE_SUPPORTED=1
 -DBOARD_WAVESHARE_ESP32_S3_TOUCH_LCD_7`. CDC no boot desligado
 (`ARDUINO_USB_CDC_ON_BOOT=0`): o serial é o chip CH343 da porta UART.
 
+## O que esta versão faz (v0.4.3)
+
+v0.4.3 (em cima da v0.4.2):
+
+- **Cena só com a U1**: saíram da fábrica os últimos sprites, frames, timers
+  e a lógica de estado que ainda animava figuras na frente da gaveta.
+  Essas imagens deixam de ser ligadas em `images.S`. Ficam a impressora
+  centrada, o cabeçote alinhado (carro + bico com o mesmo `dx`) e os 4
+  compartimentos de baixo com número, rolo e material.
+
 ## O que esta versão faz (v0.4.2)
 
 v0.4.2 (em cima da v0.4.1):
 
-- **Sem personagens andando**: o operário (caminhada, troca de rolo, senta,
-  celebra, susto) saiu da cena, dos timers e do flash (~900 KB de sprites
-  deixam de ser ligados). Só somava carga de CPU e não tinha função. A
-  operadora-chefe permanece: não anda, só troca de quadro conforme o estado
-  (dorme / apresenta / celebra / susto) e fica à frente da gaveta.
 - **Alinhamento do cabeçote**: o gantry do teto (`img_u1_carriage`) estava
   **12 px à direita** do bico (`img_u1_toolhead`). Os eixos visuais
   (círculo amarelo e bico) passam a coincidir: `U1_CARRIAGE_X = U1_TOOLHEAD_X`,
@@ -55,9 +60,7 @@ v0.4.2 (em cima da v0.4.1):
   400 px direitos. A máquina tem 434 px de largura, então ~16–17 px das
   faces laterais do pedestal ficam de fora; o corpo superior e os 4
   compartimentos de baixo entram inteiros. Todos os X locais (compartimentos,
-  bico, carro, peça, curso, operadora) acompanham o deslocamento de **+34 px**.
-  A operadora foi ajustada para X=304 para a sprite de 94 px não sair pela
-  direita.
+  bico, carro, peça, curso) acompanham o deslocamento de **+34 px**.
 
 ## O que esta versão faz (v0.4.1)
 
@@ -73,7 +76,7 @@ v0.4.1 (em cima da v0.4):
 - **Rolos na gaveta de baixo**: números 1–4, rolo colorido e plaquinha de
   material nos **4 compartimentos já existentes** da gaveta (abaixo da
   câmara). A arte não foi redesenhada. As baias do topo voltam ao original.
-  O extrusor ativo leva o contorno menta. Os personagens andam à frente.
+  O extrusor ativo leva o contorno menta.
 
 ## O que esta versão faz (v0.4)
 
@@ -84,10 +87,8 @@ v0.4 (em cima da v0.3), correções do ecrã real:
   movidas com o **mesmo dx**. A faixa 55×141 quase toda transparente
   sujava o painel RGB (lixo cinza/azul a atravessar a fascia). Movimento
   com easing (smoothstep) a cada 50 ms.
-- **Cabelo e cores escuras**: o marcador de recoloração (alpha 254) ficou
-  só no enrolamento rosa do filamento. Cabelo castanho do operário já não
-  é pintado com a cor do filamento (o branco do PLA no bico 3 deixava o
-  cabelo branco). O firmware ainda ignora pixels marrons/quase-pretos
+- **Cores escuras na recoloração**: o marcador (alpha 254) fica só no
+  enrolamento rosa do filamento. O firmware ignora pixels marrons/quase-pretos
   com a=254, por segurança. Filamento preto nas baias permanece preto
   (flanges escuros, nunca marcados).
 - **Monitor de FPS/CPU**: `LV_USE_PERF_MONITOR` desligado na versão de
@@ -98,8 +99,8 @@ v0.4 (em cima da v0.3), correções do ecrã real:
   uma plaquinha com o material (`PLA`, `PETG`, ou `--` se vazio). O
   extrusor ativo ganha um contorno menta. Bico 3 = canal 2 (confirmado).
 - **LEDs menta**: os retângulos `led_panel` (ecrã frontal, à direita de
-  "snapmaker") e `led_front` (baía de baixo, junto da operadora) foram
-  removidos — a arte de fundo já tem esses indicadores.
+  "snapmaker") e `led_front` (baía de baixo) foram removidos — a arte de
+  fundo já tem esses indicadores.
 
 A imagem de app `build/u1_factory_0x10000.bin` grava só em `0x10000`
 (preserva o NVS do Wi-Fi). A imagem mesclada DIO 16 MB 80 MHz continua
@@ -138,17 +139,8 @@ v0.3 (em cima da v0.2):
 - Cena 800×480: U1 gigante no centro (cabeçote se move no X enquanto imprime,
   a peça cresce com o progresso, LEDs pulsam/piscando), HUD em português,
   abas **WIFI / FABRICA / ARMAZEM / DIARIO**.
-- Dois personagens (a mascote **Bobina foi removida**; o rolo que o operário
-  carrega **permanece**):
-  - **Operário** — ciclo de caminhada de 4 quadros (pernas e braços se
-    alternam) com o rolo durante impressão/aquecimento/ocupada; senta e
-    pisca na ociosidade; celebra na conclusão; se assusta no erro; anima a
-    troca quando o `spool_id` muda. Recoloração do filamento (alpha 254).
-  - **Operadora-chefe** — apresenta o progresso no job; cochila na
-    ociosidade; celebra junto na conclusão; se assusta no erro. Respiração
-    e piscar sutis no idle.
 - Rolo ativo via Moonraker (não direto na VM do Spoolman): cor real (swatch
-  + recoloração do sprite), material, fabricante, peso restante; alerta
+  + recoloração do rolo na gaveta), material, fabricante, peso restante; alerta
   **FILAMENTO BAIXO** abaixo de 100 g (o filtro do armazém é 200 g).
 - Toque na cena ou no HUD abre a página de detalhes. As abas não abrem
   detalhes (`lv_event_stop_bubbling`).
@@ -313,9 +305,8 @@ no PC sem Arduino.
 
 ## Telas atuais (implementadas)
 
-- **Fábrica** — cena, HUD, abas, operário e operadora (sem Bobina), U1
-  animada, overlays (noite na ociosidade/offline, véu vermelho no erro,
-  confete na conclusão).
+- **Fábrica** — cena, HUD, abas, U1 animada (cabeçote e peça), overlays
+  (noite na ociosidade/offline, véu vermelho no erro, confete na conclusão).
 - **Detalhes** — toque na fábrica; arquivo, temps atuais e alvo, progresso,
   camada, IP, ficha do rolo.
 - **Armazém** — lista rolável (2 colunas ou compacta), busca (NFD, todas
@@ -458,15 +449,15 @@ Press Start 2P OFL) em `/workspace/u1-screen/preview/` e `docs/preview/`:
 
 | Arquivo | Conteúdo |
 |---|---|
-| `estado-offline.png` | Noite, operadora cochila, SEM CONEXAO |
-| `estado-ociosa.png` | Noite, FABRICA DORMINDO, operadora cochila |
-| `estado-aquecendo.png` | Operadora apresentando, cabeçote alinhado |
+| `estado-offline.png` | Noite, SEM CONEXAO, U1 centrada |
+| `estado-ociosa.png` | Noite, FABRICA DORMINDO, gaveta com rolos |
+| `estado-aquecendo.png` | Cabeçote alinhado, AQUECENDO O BICO |
 | `estado-imprimindo.png` | 67 %, peça crescendo, cabeçote, RESTAM 1h 23min |
-| `estado-pausada.png` | Operadora apresentando, job pausado |
-| `estado-concluida.png` | Confete, operadora celebra, 100 % |
-| `estado-erro.png` | Véu vermelho, operadora assustada |
+| `estado-pausada.png` | Job pausado, cabeçote congelado |
+| `estado-concluida.png` | Confete, peça completa, 100 % |
+| `estado-erro.png` | Véu vermelho, estado ERRO |
 | `estado-pouco-filamento.png` | Alerta laranja, PETG 72 g |
-| `estado-troca-rolo.png` | Noite, gaveta com rolos, operadora cochila |
+| `estado-troca-rolo.png` | Noite, gaveta com rolos |
 | `anim-imprimindo.gif` | Cabeçote alinhado (carro + bico) em ping-pong |
 | `tela-detalhes.png` | Página de detalhes |
 | `tela-armazem.png` | Lista com filtros, cartões e EM USO |
@@ -476,22 +467,23 @@ Press Start 2P OFL) em `/workspace/u1-screen/preview/` e `docs/preview/`:
 
 Regenerar: `python3 scripts/render_preview.py`.
 
-## Uso de memória (build real neste repositório, v0.4.2)
+## Uso de memória (build real neste repositório, v0.4.3)
 
 ```
-RAM:   24.4 %   79 792 / 327 680 bytes   (DRAM interna)
-Flash: 35.8 %    2 606 826 / 7 274 496 bytes   (partição app de ~6,94 MB, flash de 16 MB)
+RAM:   24.3 %   79 784 / 327 680 bytes   (DRAM interna)
+Flash: 28.7 %    2 086 774 / 7 274 496 bytes   (partição app de ~6,94 MB, flash de 16 MB)
 ```
 
-`build/u1_factory.bin` e `build/u1_factory_0x10000.bin` têm 2 607 184 bytes
+`build/u1_factory.bin` e `build/u1_factory_0x10000.bin` têm 2 087 136 bytes
 (header `e9 05 02 4f`). A imagem mesclada para gravar em 0x0 é
-`build/u1_factory_merged_v2.bin` (2 672 720 bytes, header `e9 04 02 4f` =
+`build/u1_factory_merged_v2.bin` (2 152 672 bytes, header `e9 04 02 4f` =
 DIO, 16 MB, 80 MHz). Para atualizar sem perder o Wi-Fi: grave só o app em
 `0x10000`. Snapshots do estoque, buffer HTTP (~192 KB) e recoloração das
 bobinas da gaveta ficam na PSRAM, fora da task do LVGL (stack de 6 KB).
-O desligamento das sprites do operário poupa ~922 KB de flash. Compilação:
-`[SUCCESS]`, sem warnings no código deste projeto. **Não grave a placa a
-partir desta máquina** — a imagem está pronta para o Caio gravar.
+Em relação à v0.4.1, o flash caiu ~1,41 MB (sprites que não entram mais
+na imagem). Compilação: `[SUCCESS]`, sem warnings no código deste projeto.
+**Não grave a placa a partir desta máquina** — a imagem está pronta para
+o Caio gravar.
 
 ## O que não foi verificado
 
