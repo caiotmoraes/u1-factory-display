@@ -1,6 +1,6 @@
 # U1 Factory Display
 
-Pixel-art factory dashboard for the Snapmaker U1 on ESP32-S3 touch displays (Waveshare 7"). Live print status with animated characters, 4-head spool view and full Spoolman inventory via Moonraker. Companion to [Spool Factory](https://github.com/caiotmoraes/spool-factory).
+Pixel-art factory dashboard for the Snapmaker U1 on ESP32-S3 touch displays (Waveshare 7"). Live print status with a 4-head spool view and full Spoolman inventory via Moonraker. Companion to [Spool Factory](https://github.com/caiotmoraes/spool-factory).
 
 ## Monitor da fábrica — Snapmaker U1 no Waveshare ESP32-S3-Touch-LCD-7
 
@@ -10,7 +10,7 @@ app [Spool Factory](https://github.com/caiotmoraes/spool-factory) e na máquina
 de estados do [klippyface](https://github.com/luke-kearney/klippyface).
 
 Nesta versão a cena da **fábrica** está completa (estados, HUD em português,
-três personagens, rolo ativo via Spoolman). O **armazém de estoque** é só um
+operadora (estática), rolo ativo via Spoolman). O **armazém de estoque** é só um
 placeholder: o mapeamento do app e a proposta de navegação touch estão
 documentados abaixo; **nenhuma escrita** no Spoolman ou na U1 foi implementada.
 
@@ -36,6 +36,28 @@ ESP32_IO_Expander 1.1.0, esp-lib-utils 0.2.0, LVGL 8.4.0, ArduinoJson 7.
 Macros da placa: `-DESP_PANEL_BOARD_DEFAULT_USE_SUPPORTED=1
 -DBOARD_WAVESHARE_ESP32_S3_TOUCH_LCD_7`. CDC no boot desligado
 (`ARDUINO_USB_CDC_ON_BOOT=0`): o serial é o chip CH343 da porta UART.
+
+## O que esta versão faz (v0.4.2)
+
+v0.4.2 (em cima da v0.4.1):
+
+- **Sem personagens andando**: o operário (caminhada, troca de rolo, senta,
+  celebra, susto) saiu da cena, dos timers e do flash (~900 KB de sprites
+  deixam de ser ligados). Só somava carga de CPU e não tinha função. A
+  operadora-chefe permanece: não anda, só troca de quadro conforme o estado
+  (dorme / apresenta / celebra / susto) e fica à frente da gaveta.
+- **Alinhamento do cabeçote**: o gantry do teto (`img_u1_carriage`) estava
+  **12 px à direita** do bico (`img_u1_toolhead`). Os eixos visuais
+  (círculo amarelo e bico) passam a coincidir: `U1_CARRIAGE_X = U1_TOOLHEAD_X`,
+  com o mesmo `dx` em todos os pontos do curso.
+- **Impressora centrada na cena**: `SCENE_CROP_X` passou de 240 para **206**,
+  para o centro do corpo (orig ≈ 190–623, centro 406,5) cair no meio dos
+  400 px direitos. A máquina tem 434 px de largura, então ~16–17 px das
+  faces laterais do pedestal ficam de fora; o corpo superior e os 4
+  compartimentos de baixo entram inteiros. Todos os X locais (compartimentos,
+  bico, carro, peça, curso, operadora) acompanham o deslocamento de **+34 px**.
+  A operadora foi ajustada para X=304 para a sprite de 94 px não sair pela
+  direita.
 
 ## O que esta versão faz (v0.4.1)
 
@@ -432,20 +454,20 @@ leitura; o `PATCH` de vínculo fica junto das outras escritas.
 Para brincar com cenários: `python3 scripts/fake_moonraker.py --port 7125 --scenario printing --spool 40`.
 
 Pré-visualizações (composição Python fiel a `layout.h` / `ui.cpp`, fonte
-Press Start 2P OFL) em `/workspace/u1-screen/preview/`:
+Press Start 2P OFL) em `/workspace/u1-screen/preview/` e `docs/preview/`:
 
 | Arquivo | Conteúdo |
 |---|---|
-| `estado-offline.png` | Noite, operário sentado, operadora cochila, SEM CONEXAO |
-| `estado-ociosa.png` | Noite, FABRICA DORMINDO, operário sentado com o rolo |
-| `estado-aquecendo.png` | Operário andando (ciclo de pernas), operadora apresentando |
+| `estado-offline.png` | Noite, operadora cochila, SEM CONEXAO |
+| `estado-ociosa.png` | Noite, FABRICA DORMINDO, operadora cochila |
+| `estado-aquecendo.png` | Operadora apresentando, cabeçote alinhado |
 | `estado-imprimindo.png` | 67 %, peça crescendo, cabeçote, RESTAM 1h 23min |
-| `estado-pausada.png` | Operário sentado, job pausado |
-| `estado-concluida.png` | Confete, os dois celebram, 100 % |
-| `estado-erro.png` | Véu vermelho, os dois assustados |
+| `estado-pausada.png` | Operadora apresentando, job pausado |
+| `estado-concluida.png` | Confete, operadora celebra, 100 % |
+| `estado-erro.png` | Véu vermelho, operadora assustada |
 | `estado-pouco-filamento.png` | Alerta laranja, PETG 72 g |
-| `estado-troca-rolo.png` | Animação de troca do operário (rolo permanece) |
-| `anim-imprimindo.gif` | Ciclo de caminhada + cabeçote da U1 |
+| `estado-troca-rolo.png` | Noite, gaveta com rolos, operadora cochila |
+| `anim-imprimindo.gif` | Cabeçote alinhado (carro + bico) em ping-pong |
 | `tela-detalhes.png` | Página de detalhes |
 | `tela-armazem.png` | Lista com filtros, cartões e EM USO |
 | `tela-wifi.png` | Menu Wi-Fi (varredura 2,4 GHz) |
@@ -454,19 +476,20 @@ Press Start 2P OFL) em `/workspace/u1-screen/preview/`:
 
 Regenerar: `python3 scripts/render_preview.py`.
 
-## Uso de memória (build real neste repositório, v0.4.1)
+## Uso de memória (build real neste repositório, v0.4.2)
 
 ```
-RAM:   24.4 %   79 840 / 327 680 bytes   (DRAM interna)
-Flash: 48.5 %    3 528 646 / 7 274 496 bytes   (partição app de ~6,94 MB, flash de 16 MB)
+RAM:   24.4 %   79 792 / 327 680 bytes   (DRAM interna)
+Flash: 35.8 %    2 606 826 / 7 274 496 bytes   (partição app de ~6,94 MB, flash de 16 MB)
 ```
 
-`build/u1_factory.bin` e `build/u1_factory_0x10000.bin` têm 3 529 008 bytes.
-A imagem mesclada para gravar em 0x0 é `build/u1_factory_merged_v2.bin`
-(3 594 544 bytes, header `e9 04 02 4f` = DIO, 16 MB, 80 MHz). Para
-atualizar sem perder o Wi-Fi: grave só o app em `0x10000`. Snapshots do estoque, buffer HTTP (~192 KB)
-e recoloração ficam na PSRAM, fora da task do LVGL (stack de 6 KB).
-Imagens (~1,81 MB, sem a Bobina) vão para `.flash.rodata`. Compilação:
+`build/u1_factory.bin` e `build/u1_factory_0x10000.bin` têm 2 607 184 bytes
+(header `e9 05 02 4f`). A imagem mesclada para gravar em 0x0 é
+`build/u1_factory_merged_v2.bin` (2 672 720 bytes, header `e9 04 02 4f` =
+DIO, 16 MB, 80 MHz). Para atualizar sem perder o Wi-Fi: grave só o app em
+`0x10000`. Snapshots do estoque, buffer HTTP (~192 KB) e recoloração das
+bobinas da gaveta ficam na PSRAM, fora da task do LVGL (stack de 6 KB).
+O desligamento das sprites do operário poupa ~922 KB de flash. Compilação:
 `[SUCCESS]`, sem warnings no código deste projeto. **Não grave a placa a
 partir desta máquina** — a imagem está pronta para o Caio gravar.
 
@@ -479,7 +502,7 @@ partir desta máquina** — a imagem está pronta para o Caio gravar.
   tarefa). O protocolo foi exercitado só contra o FakeMoonraker.
 - Portal Wi-Fi, varredura da /24 e gravação NVS: implementados, não
   testados em hardware / LAN reais.
-- A recoloração do sprite do operário só troca pixels marcados com
+- A recoloração das bobinas na gaveta só troca pixels marcados com
   alpha 254. O swatch do HUD é o sinal principal da cor do rolo.
 - O PN532 ainda não está ligado (gancho `nfc_hook` pronto; nunca no I2C
   GPIO 8/9). O UID é digitado à mão até o módulo chegar.

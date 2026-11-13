@@ -10,6 +10,7 @@ FW = ROOT / "firmware"
 PNG = FW / "assets_png"
 FONT_PATH = ROOT / "spool-factory" / "assets" / "pixel.ttf"
 OUT = ROOT / "preview"
+OUT_DOCS = FW / "docs" / "preview"
 
 SCREEN_W, SCREEN_H = 800, 480
 FLOOR_Y = 452
@@ -17,19 +18,17 @@ PANEL_W = 400
 SCENE_X = 400
 SCENE_W = 400
 SCENE_H = 480
-SCENE_CROP_X = 240
+SCENE_CROP_X = 206
 HUD_X, HUD_Y, HUD_W, HUD_H = 0, 0, 400, 480
 PAD = 16
-OPERARIO_X0, OPERARIO_X1 = 8, 200
-OPERADORA_X = 298
+OPERADORA_X = 304
 TAB_Y = 8
 FTAB_Y = 10
-OPERARIO_SIT_X = 16
-U1_TOOLHEAD_X, U1_TOOLHEAD_Y = 171, 151
-U1_TOOLHEAD_X_MIN, U1_TOOLHEAD_X_MAX = 120, 230
-U1_CARRIAGE_X, U1_CARRIAGE_Y = 183, 47
-U1_PART_X, U1_PART_Y = 145, 186
-U1_SLOTS = ((8, 80), (92, 70), (168, 72), (243, 82))
+U1_TOOLHEAD_X, U1_TOOLHEAD_Y = 205, 151
+U1_TOOLHEAD_X_MIN, U1_TOOLHEAD_X_MAX = 154, 264
+U1_CARRIAGE_X, U1_CARRIAGE_Y = 205, 47
+U1_PART_X, U1_PART_Y = 179, 186
+U1_SLOTS = ((42, 80), (126, 70), (202, 72), (277, 82))
 U1_SLOT_HL_Y, U1_SLOT_HL_H = 318, 80
 U1_SLOT_NUM_Y, U1_SLOT_PLATE_Y, U1_SLOT_SPOOL_Y = 330, 348, 358
 
@@ -52,14 +51,8 @@ def load(name):
 
 SPRITES = {
     "bg": Image.open(PNG / "img_bg_factory.png").convert("RGBA"),
-    "walk": [load(f"img_operario_walk_{i}.png") for i in range(4)],
-    "walk_l": [load(f"img_operario_walk_l_{i}.png") for i in range(4)],
-    "troca": [load(f"img_operario_troca_{i}.png") for i in range(4)],
     "op_idle": [load("img_operadora_0.png"), load("img_operadora_1.png")],
     "op_apresenta": [load("img_operadora_2.png"), load("img_operadora_3.png")],
-    "senta": [load("img_operario_senta_0.png"), load("img_operario_senta_1.png")],
-    "celebra": [load("img_operario_celebra_0.png"), load("img_operario_celebra_1.png")],
-    "susto": [load("img_operario_susto_0.png"), load("img_operario_susto_1.png")],
     "chefe_dorme": [load("img_operadora_dorme_0.png"), load("img_operadora_dorme_1.png")],
     "chefe_celebra": [load("img_operadora_celebra_0.png"), load("img_operadora_celebra_1.png")],
     "chefe_susto": [load("img_operadora_susto_0.png"), load("img_operadora_susto_1.png")],
@@ -327,13 +320,6 @@ def scene(s, active_tab=0):
         crop = part.crop((0, ph - vis, pw, ph))
         paste(cropped, crop, U1_PART_X, py + (ph - vis))
 
-    op_kind, op_fr, op_x = s.get("op", ("senta", 0, OPERARIO_SIT_X))
-    op_map = {"walk": "walk", "walk_l": "walk_l", "troca": "troca",
-              "senta": "senta", "celebra": "celebra", "susto": "susto"}
-    spr = SPRITES[op_map.get(op_kind, "senta")][op_fr]
-    spr = recolor_sprite(spr, active_rgb(s))
-    feet(cropped, spr, op_x)
-
     ch_kind, ch_fr = s.get("chefe", ("dorme", 0))
     ch_map = {"apresenta": "op_apresenta", "idle": "op_idle",
               "dorme": "chefe_dorme", "celebra": "chefe_celebra", "susto": "chefe_susto"}
@@ -378,20 +364,20 @@ SCENES = {
     "estado-offline.png": dict(
         state="OFFLINE", sub="SEM CONEXAO", night=True, progress=0,
         nozzle=24, bed=24, spool=None, ip=None, feeders=[],
-        op=("senta", 0, OPERARIO_SIT_X), chefe=("dorme", 0),
+        chefe=("dorme", 0),
     ),
     "estado-ociosa.png": dict(
         state="OCIOSA", sub="FABRICA DORMINDO", night=True, progress=0,
         nozzle=24, bed=24, spool=PLA, ip="192.168.0.4",
         active_extruder=0, feeders=FEEDERS_OK,
-        op=("senta", 1, OPERARIO_SIT_X), chefe=("dorme", 1),
+        chefe=("dorme", 1),
     ),
     "estado-aquecendo.png": dict(
         state="AQUECENDO", sub="AQUECENDO O BICO", progress=0,
         layer=0, layer_total=755, remaining_s=6660,
         nozzle=180, nozzle_target=210, bed=50, bed_target=55,
         spool=PLA, ip="192.168.0.4", active_extruder=0, feeders=FEEDERS_OK,
-        op=("walk", 1, 90), chefe=("apresenta", 0), th_x=190,
+        chefe=("apresenta", 0), th_x=224,
     ),
     "estado-imprimindo.png": dict(
         state="IMPRIMINDO", sub="interial_PLA_1h51m.gcode", progress=0.21,
@@ -399,7 +385,7 @@ SCENES = {
         nozzle=210, nozzle_target=210, bed=55, bed_target=55,
         spool=None, filament=WHITE_FIL, ip="192.168.0.4",
         active_extruder=2, feeders=FEEDERS_LIVE,
-        op=("walk", 2, 110), chefe=("apresenta", 1), th_x=200,
+        chefe=("apresenta", 1), th_x=234,
     ),
     "estado-pausada.png": dict(
         state="PAUSADA", sub="interial_PLA_1h51m.gcode", progress=0.21,
@@ -407,7 +393,7 @@ SCENES = {
         nozzle=210, nozzle_target=210, bed=55, bed_target=55,
         spool=None, filament=WHITE_FIL, ip="192.168.0.4",
         active_extruder=2, feeders=FEEDERS_LIVE,
-        op=("senta", 0, OPERARIO_SIT_X), chefe=("apresenta", 0), th_x=200,
+        chefe=("apresenta", 0), th_x=234,
     ),
     "estado-concluida.png": dict(
         state="CONCLUÍDA", sub="", progress=1.0,
@@ -415,14 +401,14 @@ SCENES = {
         nozzle=80, bed=40, spool=dict(id=24, material="PLA", vendor="SUNLU",
                                       name="White", g=658, color="FFFFFF"),
         ip="192.168.0.4", party=True, active_extruder=2, feeders=FEEDERS_OK,
-        op=("celebra", 1, OPERARIO_SIT_X + 40), chefe=("celebra", 1),
+        chefe=("celebra", 1),
     ),
     "estado-erro.png": dict(
         state="ERRO", sub="", progress=0.12,
         layer=18, layer_total=755,
         nozzle=215, bed=60, spool=PLA, ip="192.168.0.4", error=True,
         active_extruder=0, feeders=FEEDERS_OK,
-        op=("susto", 1, OPERARIO_SIT_X), chefe=("susto", 1),
+        chefe=("susto", 1),
     ),
     "estado-pouco-filamento.png": dict(
         state="IMPRIMINDO", sub="interial_PLA_1h51m.gcode", progress=0.91,
@@ -433,13 +419,13 @@ SCENES = {
             FEEDERS_OK[0], FEEDERS_OK[1], FEEDERS_OK[2],
             dict(id=17, vendor="Masterprint", material="PETG", g=72, color="FF4000"),
         ],
-        op=("walk", 3, 150), chefe=("apresenta", 0), th_x=160,
+        chefe=("apresenta", 0), th_x=194,
     ),
     "estado-troca-rolo.png": dict(
         state="OCIOSA", sub="FABRICA DORMINDO", night=True, progress=0,
         nozzle=24, bed=24, spool=PETG_LOW, ip="192.168.0.4",
         active_extruder=3, feeders=FEEDERS_OK,
-        op=("troca", 2, 80), chefe=("dorme", 0),
+        chefe=("dorme", 0),
     ),
 }
 
@@ -696,11 +682,8 @@ def main():
         t = (i / half) if i < half else (2.0 - i / half)
         u = t * t * (3.0 - 2.0 * t)
         th = U1_TOOLHEAD_X_MIN + int(u * span + 0.5)
-        fr = (i // 2) % 4
-        ox = 8 + (i * 5) % (200 - 8)
         s = dict(base)
         s["th_x"] = th
-        s["op"] = ("walk" if (i * 5) // (200 - 8) % 2 == 0 else "walk_l", fr, ox)
         s["chefe"] = ("apresenta", (i // 8) % 2)
         frames.append(scene(s))
     gif = OUT / "anim-imprimindo.gif"
@@ -718,7 +701,7 @@ def main():
     ih = rows * (thumb_h + label_h) + (rows + 1) * pad + 20
     idx = Image.new("RGB", (iw, ih), (8, 15, 35))
     d = ImageDraw.Draw(idx)
-    d.text((pad, 6), "U1 Factory Display  v0.4  —  estados", font=F12, fill=rgb(MINT)[:3])
+    d.text((pad, 6), "U1 Factory Display  v0.4.2  —  estados", font=F12, fill=rgb(MINT)[:3])
     for i, name in enumerate(names):
         r, c = divmod(i, cols)
         x = pad + c * (thumb_w + pad)
@@ -729,10 +712,16 @@ def main():
     idx.save(OUT / "indice.png", optimize=True)
     written.append("indice.png")
 
+    import shutil
+    OUT_DOCS.mkdir(parents=True, exist_ok=True)
     print("previews em", OUT)
     for n in written:
         fp = OUT / n
         print(f"  {n:32} {fp.stat().st_size:7d}  {Image.open(fp).size}")
+        dest = OUT_DOCS / n
+        if dest.resolve() != fp.resolve():
+            shutil.copy2(fp, dest)
+    print("cópia em", OUT_DOCS)
 
 if __name__ == "__main__":
     main()

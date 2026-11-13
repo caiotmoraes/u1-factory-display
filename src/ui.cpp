@@ -14,7 +14,7 @@ StockFilter ui_filter;
 bool ui_compact = false;
 
 static lv_obj_t *scene;
-static lv_obj_t *img_bg, *img_op, *img_chefe, *img_toolhead, *img_carriage, *img_part, *img_part_clip;
+static lv_obj_t *img_bg, *img_chefe, *img_toolhead, *img_carriage, *img_part, *img_part_clip;
 static lv_obj_t *night, *error_veil;
 static lv_obj_t *bay_hl[4], *bay_num_bg[4], *bay_num[4], *bay_spool[4], *bay_plate[4], *bay_mat[4];
 static uint8_t *bay_recolor[4];
@@ -32,16 +32,7 @@ static lv_obj_t *toast_box, *toast_lbl;
 static uint32_t toast_until = 0;
 
 static int anim_tick = 0;
-static int op_x = OPERARIO_X0;
-static int op_dir = 1;
-static int troca_left = 0;
 static int th_x = U1_TOOLHEAD_X;
-
-static uint8_t *recolor_buf = nullptr;
-static size_t recolor_cap = 0;
-static lv_img_dsc_t recolor_dsc;
-static const lv_img_dsc_t *recolor_src = nullptr;
-static uint32_t recolor_rgb = 0xFFFFFFFF;
 
 /* overlays */
 static lv_obj_t *overlay, *kb;
@@ -340,18 +331,6 @@ static uint16_t rgb_to_565(uint32_t rgb) {
     return (uint16_t)(((rgb >> 8) & 0xF800) | ((rgb >> 5) & 0x07E0) | ((rgb >> 3) & 0x1F));
 }
 
-static const lv_img_dsc_t *with_spool_color(const lv_img_dsc_t *src, uint32_t rgb) {
-    if (!src || !recolor_buf) return src;
-    if (src == recolor_src && rgb == recolor_rgb) return &recolor_dsc;
-    if (src->data_size > recolor_cap) return src;
-    recolor_into(recolor_buf, src->data, src->header.w * src->header.h, rgb_to_565(rgb));
-    recolor_dsc = *src;
-    recolor_dsc.data = recolor_buf;
-    recolor_src = src;
-    recolor_rgb = rgb;
-    return &recolor_dsc;
-}
-
 static const lv_img_dsc_t *bay_colored(int i, uint32_t rgb) {
     if (i < 0 || i >= 4 || !bay_recolor[i]) return &img_u1_spool;
     if (bay_cache_valid[i] && bay_rgb_cache[i] == rgb) return &bay_dsc[i];
@@ -579,44 +558,11 @@ static bool is_walk_state(PrinterState st) {
 static void tick_anim(void) {
     const PrinterSnapshot *s = &ui_snap;
     anim_tick++;
-    uint32_t rgb = active_filament_rgb(s);
     int breathe = 0;
     if (s->state == PRINTER_IDLE || s->state == PRINTER_OFFLINE)
         breathe = ((anim_tick / 5) % 2);
 
-    /* ----- operário ----- */
-    const lv_img_dsc_t *of = img_operario_walk[0];
-    int ox = op_x;
-    if (troca_left > 0) {
-        of = img_operario_troca[(4 - troca_left) % 4];
-        troca_left--;
-        ox = op_x;
-    } else if (s->state == PRINTER_ERROR) {
-        of = img_operario_susto[(anim_tick / 2) % 2];
-        ox = OPERARIO_SIT_X;
-    } else if (s->state == PRINTER_COMPLETE) {
-        of = img_operario_celebra[anim_tick % 2];
-        ox = OPERARIO_SIT_X + 40;
-    } else if (is_walk_state(s->state)) {
-        op_x += op_dir * OPERARIO_SPEED;
-        if (op_x >= OPERARIO_X1) { op_x = OPERARIO_X1; op_dir = -1; }
-        if (op_x <= OPERARIO_X0) { op_x = OPERARIO_X0; op_dir = 1; }
-        int fr = anim_tick % 4;  /* 1 quadro por tick (~200 ms) */
-        of = (op_dir > 0) ? img_operario_walk[fr] : img_operario_walk_l[fr];
-        ox = op_x;
-    } else {
-        /* idle / offline / paused: senta e pisca */
-        int blink = ((anim_tick % 16) == 14 || (anim_tick % 16) == 15) ? 1 : 0;
-        of = img_operario_senta[blink];
-        ox = OPERARIO_SIT_X;
-        op_x = ox;
-        op_dir = 1;
-    }
-    of = with_spool_color(of, rgb);
-    lv_img_set_src(img_op, of);
-    lv_obj_set_pos(img_op, ox, feet_y(of) + breathe);
-
-    /* ----- operadora (Bobina removida: ela reage aos estados) ----- */
+    /* ----- operadora (estática em X; só troca de quadro) ----- */
     const lv_img_dsc_t *cf;
     if (s->state == PRINTER_ERROR) {
         cf = img_operadora_susto[(anim_tick / 2) % 2];
@@ -673,9 +619,7 @@ static void on_timer(lv_timer_t *) {
     bool dirty = false;
     uint32_t seq = ui_mr_seq;
     if (moonraker_copy(&ui_snap, &seq) || seq != ui_mr_seq) {
-        bool pulse = ui_snap.spool_changed;
         ui_mr_seq = seq;
-        if (pulse) troca_left = 8;
         dirty = true;
     }
     if (ui_inv) {
@@ -887,7 +831,7 @@ static void build_bays(lv_obj_t *parent) {
     for (int i = 0; i < 4; i++) {
         int x = k_bay_x[i], w = k_bay_w[i];
         /* Gaveta inferior: widgets nos 4 compartimentos já pintados.
-         * Personagens são criados depois, então andam à frente. */
+         * A operadora é criada depois, então fica à frente. */
         bay_hl[i] = lv_obj_create(parent);
         lv_obj_set_pos(bay_hl[i], x - 2, U1_SLOT_HL_Y);
         lv_obj_set_size(bay_hl[i], w + 4, U1_SLOT_HL_H);
@@ -954,9 +898,6 @@ static void build_bays(lv_obj_t *parent) {
 
 void ui_init(void) {
     stock_filter_clear(&ui_filter);
-    recolor_cap = 110 * 200 * 3 + 64;
-    recolor_buf = (uint8_t *)heap_caps_malloc(recolor_cap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!recolor_buf) recolor_buf = (uint8_t *)malloc(recolor_cap);
     {
         size_t bcap = (size_t)IMG_U1_SPOOL_W * IMG_U1_SPOOL_H * 3 + 32;
         for (int i = 0; i < 4; i++) {
@@ -1048,12 +989,7 @@ void ui_init(void) {
     lv_obj_clear_flag(error_veil, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(error_veil, LV_OBJ_FLAG_HIDDEN);
 
-    /* personagens (Bobina NÃO entra na cena) */
-    img_op = lv_img_create(scene);
-    lv_img_set_src(img_op, img_operario_walk[0]);
-    lv_obj_set_pos(img_op, OPERARIO_X0, feet_y(img_operario_walk[0]));
-    lv_obj_clear_flag(img_op, LV_OBJ_FLAG_CLICKABLE);
-
+    /* operadora (estática; Bobina e o operário andando não entram) */
     img_chefe = lv_img_create(scene);
     lv_img_set_src(img_chefe, img_operadora_dorme[0]);
     lv_obj_set_pos(img_chefe, OPERADORA_X, feet_y(img_operadora_dorme[0]));

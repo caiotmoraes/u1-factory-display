@@ -15,13 +15,10 @@
 #define HUD_W             400
 #define HUD_H             480
 
-/* Personagens — coordenadas locais do painel direito (0..399) */
-#define OPERARIO_X0       8
-#define OPERARIO_X1       200
-#define OPERARIO_SPEED    3            /* px por tick (200 ms) */
-#define OPERARIO_SIT_X    16
-
-#define OPERADORA_X       298
+/* Operadora (estática em X, só troca de quadro). 304 deixa a sprite
+ * de 94 px inteira na cena de 400 (crop 206; a posição-mundo antiga
+ * 538 cairia em 332 e sairia 26 px pela direita). */
+#define OPERADORA_X       304
 
 /* Quatro abas no canto direito: WIFI + FABRICA + ARMAZEM + DIARIO
  * (ecrãs cheios: armazém, diário, wifi, detalhes). */
