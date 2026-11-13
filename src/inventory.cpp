@@ -1023,7 +1023,7 @@ static void do_assign(int ch, int spool_id) {
     JsonDocument body;
     body["channel"] = ch;
     body["info"] = serialized(info);
-    body["message"] = "U1 Fabrica: associacao manual";
+    body["message"] = "U1 Factory Display: associacao manual";
     char bj[640];
     serializeJson(body, bj, sizeof(bj));
     int len = 0;

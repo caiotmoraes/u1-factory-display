@@ -13,13 +13,13 @@ static WebServer server(80);
 static DNSServer dns;
 static bool portal = false;
 
-static const char *AP_SSID = "U1-FABRICA";
-static const char *AP_PASS = "u1fabrica"; /* senha do portal, documentada no README */
+static const char *AP_SSID = "U1-DISPLAY";
+static const char *AP_PASS = "u1display"; /* senha do portal, documentada no README */
 
 static const char PAGE[] = R"HTML(
 <!DOCTYPE html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>U1 Fábrica — Wi-Fi</title>
+<title>U1 Factory Display — Wi-Fi</title>
 <style>
 body{font-family:sans-serif;background:#080f23;color:#f9f2de;margin:0;padding:24px}
 h1{font-size:20px;color:#59ecc5}
@@ -28,7 +28,7 @@ button{background:#59ecc5;color:#081725;font-weight:700}
 .card{background:#111d37;padding:16px;max-width:420px}
 </style></head><body>
 <div class="card">
-<h1>U1 Fábrica</h1>
+<h1>U1 Factory Display</h1>
 <p>Informe o Wi-Fi da casa. A tela guarda a senha só na própria placa (NVS).</p>
 <form method="POST" action="/save">
 <input name="ssid" placeholder="Nome da rede (SSID)" required>
@@ -76,7 +76,7 @@ static void start_portal() {
 static bool try_sta(const char *ssid, const char *pass, uint32_t ms) {
     if (!ssid || !ssid[0]) return false;
     WiFi.mode(WIFI_STA);
-    WiFi.setHostname("u1-fabrica");
+    WiFi.setHostname("u1-display");
     WiFi.begin(ssid, pass && pass[0] ? pass : nullptr);
     Serial.printf("[wifi] conectando em %s...\n", ssid);
     uint32_t start = millis();

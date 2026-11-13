@@ -907,9 +907,9 @@ static void wifi_show_current(void) {
     char line[160];
     if (ssid[0])
         snprintf(line, sizeof(line), "Agora: %s    IP %s%s", ssid, ip[0] ? ip : "--",
-                 wifi_is_portal() ? "    (portal U1-FABRICA)" : "");
+                 wifi_is_portal() ? "    (portal U1-DISPLAY)" : "");
     else
-        snprintf(line, sizeof(line), "Desconectado. Portal de fallback: U1-FABRICA (senha u1fabrica).");
+        snprintf(line, sizeof(line), "Desconectado. Portal de fallback: U1-DISPLAY (senha u1display).");
     lv_label_set_text(wifi_cur, line);
 }
 

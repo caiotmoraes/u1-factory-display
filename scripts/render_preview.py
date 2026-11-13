@@ -718,7 +718,7 @@ def main():
     ih = rows * (thumb_h + label_h) + (rows + 1) * pad + 20
     idx = Image.new("RGB", (iw, ih), (8, 15, 35))
     d = ImageDraw.Draw(idx)
-    d.text((pad, 6), "U1 Fabrica  v0.4  —  estados", font=F12, fill=rgb(MINT)[:3])
+    d.text((pad, 6), "U1 Factory Display  v0.4  —  estados", font=F12, fill=rgb(MINT)[:3])
     for i, name in enumerate(names):
         r, c = divmod(i, cols)
         x = pad + c * (thumb_w + pad)

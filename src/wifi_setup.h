@@ -18,7 +18,7 @@ typedef struct {
 void wifi_setup_start(void);          /* tenta STA; se falhar, sobe o portal */
 bool wifi_is_portal(void);
 bool wifi_is_connected(void);
-/* SSID e IP atuais (STA). Se portal, ssid = AP "U1-FABRICA". */
+/* SSID e IP atuais (STA). Se portal, ssid = AP "U1-DISPLAY". */
 void wifi_current(char *ssid, size_t sn, char *ip, size_t in);
 
 /* Scan assíncrono. Em modo AP, sobe AP+STA (2.4 GHz). */

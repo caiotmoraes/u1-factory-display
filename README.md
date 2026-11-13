@@ -1,4 +1,8 @@
-# Monitor da fábrica — Snapmaker U1 no Waveshare ESP32-S3-Touch-LCD-7
+# U1 Factory Display
+
+Pixel-art factory dashboard for the Snapmaker U1 on ESP32-S3 touch displays (Waveshare 7"). Live print status with animated characters, 4-head spool view and full Spoolman inventory via Moonraker. Companion to [Spool Factory](https://github.com/caiotmoraes/spool-factory).
+
+## Monitor da fábrica — Snapmaker U1 no Waveshare ESP32-S3-Touch-LCD-7
 
 Firmware de um painel 800×480 (LCD RGB ST7262 + toque GT911, 8 MB de PSRAM)
 para acompanhar a Snapmaker U1 (Klipper / Moonraker). Visual inspirado no
@@ -132,7 +136,7 @@ v0.3 (em cima da v0.2):
   em PSRAM.
 - **Menu Wi-Fi na tela**: varredura (2,4 GHz), SSID+RSSI+cadeado, senha
   com teclado LVGL, grava NVS `u1wifi` (ssid/pass) e reinicia. O portal
-  `U1-FABRICA` continua como fallback. Descoberta do IP da U1 (NVS +
+  `U1-DISPLAY` continua como fallback. Descoberta do IP da U1 (NVS +
   semente `192.168.0.4` + varredura da /24 na porta 7125).
 - **Diário** local (SPIFFS, 60 linhas), busca e filtro por tipo.
 
@@ -141,7 +145,7 @@ v0.3 (em cima da v0.2):
 1. Copie `include/secrets.h.example` para `include/secrets.h`.
 2. Preencha `WIFI_SSID` e `WIFI_PASSWORD`. O arquivo está no `.gitignore`.
 3. Se o SSID ficar vazio (ou a conexão falhar), a placa sobe o ponto de
-   acesso **`U1-FABRICA`**, senha **`u1fabrica`**. No celular, abra
+   acesso **`U1-DISPLAY`**, senha **`u1display`**. No celular, abra
    `http://192.168.4.1`, grave a rede e a placa reinicia.
 4. Na própria tela, a aba **WIFI** varre as redes 2,4 GHz (em modo portal
    a placa sobe AP+STA), mostra RSSI e cadeado, pede a senha e grava no

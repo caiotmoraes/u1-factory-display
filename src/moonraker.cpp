@@ -445,7 +445,7 @@ static void task(void *) {
             s.state = PRINTER_OFFLINE;
             cpy(s.status_msg, sizeof(s.status_msg),
                 WiFi.getMode() == WIFI_MODE_AP || WiFi.getMode() == WIFI_MODE_APSTA
-                    ? "Conecte-se ao Wi-Fi U1-FABRICA"
+                    ? "Conecte-se ao Wi-Fi U1-DISPLAY"
                     : "Sem Wi-Fi");
             publish(s);
             vTaskDelay(pdMS_TO_TICKS(500));
