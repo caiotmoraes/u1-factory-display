@@ -210,6 +210,11 @@ static bool parse_objects(const String &body, PrinterSnapshot &s) {
     if (err) return false;
     JsonObject root = root_of(doc);
     JsonObject st = root["status"].is<JsonObject>() ? root["status"].as<JsonObject>() : root;
+    const float display_progress = st["display_status"]["progress"] | -1.0f;
+    const float file_progress = st["virtual_sdcard"]["progress"] | 0.0f;
+    s.progress = display_progress >= 0.0f && display_progress <= 1.0f
+                     ? display_progress : file_progress;
+    s.remaining_s = 0;
     if (st["print_stats"].is<JsonObject>()) {
         JsonObject ps = st["print_stats"];
         cpy(s.print_stats, sizeof(s.print_stats), ps["state"] | "");
@@ -224,17 +229,6 @@ static bool parse_objects(const String &body, PrinterSnapshot &s) {
         if (estimated > 0 && duration >= 0) s.remaining_s = estimated > duration ? estimated - duration : 0;
         else if (s.progress > 0.01f && duration > 0) s.remaining_s = duration / s.progress - duration;
         s.cancelled = (strcasecmp(s.print_stats, "cancelled") == 0);
-    }
-    if (st["virtual_sdcard"].is<JsonObject>()) {
-        s.progress = st["virtual_sdcard"]["progress"] | 0.0f;
-        /* recalcula remaining se ainda não tínhamos estimated_time */
-        float duration = st["print_stats"]["print_duration"] | 0.0f;
-        if (s.remaining_s <= 0 && s.progress > 0.01f && duration > 0)
-            s.remaining_s = duration / s.progress - duration;
-    }
-    if (st["display_status"].is<JsonObject>()) {
-        float p = st["display_status"]["progress"] | -1.0f;
-        if (p >= 0 && s.progress <= 0) s.progress = p;
     }
     if (st["extruder"].is<JsonObject>()) {
         s.nozzle_c = st["extruder"]["temperature"] | 0.0f;
