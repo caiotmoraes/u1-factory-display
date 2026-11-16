@@ -4,12 +4,16 @@
 #include "ui_priv.h"
 #include "control.h"
 #include <stdio.h>
+#include <string.h>
 
 extern uint32_t g_ms;
 extern PrinterSnapshot fake_snap;
 extern uint32_t fake_seq;
 void fake_load_inventory(const char *path);
 void fake_set_thumb(const char *path);
+void fake_inventory_empty(void);
+extern int fake_quiet_req, fake_loud_req;
+const char *sim_fil_grams(int i);
 
 static lv_color_t fb[800 * 480];
 static lv_color_t draw_buf[800 * 480];
@@ -111,6 +115,32 @@ int main(int argc, char **argv) {
         fprintf(stderr, "objetos LVGL (telas exceto Controle): %d\n", tot);
     }
     char p[512];
+    if (getenv("REPRO")) {
+        /* v0.6.1: dados reais da U1 — filament_spool_id = [40,28,24,25], extrusor 0,
+         * rolo ativo #40 lido por id; estoque ainda não carregado (Armazém nunca aberto). */
+        fake_inventory_empty();
+        const int base = fake_quiet_req;
+        const int ids[4] = {40, 28, 24, 25};
+        for (int i = 0; i < 4; i++) fake_snap.feeder.ch[i].spool_id = ids[i];
+        fake_snap.active_extruder = 0;
+        fake_snap.spool.valid = true; fake_snap.spool.id = 40; fake_snap.spool.remaining_g = 512.7f;
+        fake_seq++;
+        run(1000);
+        fprintf(stderr, "antes:  T1=%s T2=%s T3=%s T4=%s  carregamentos pedidos=%d (toast=%d)\n",
+                sim_fil_grams(0), sim_fil_grams(1), sim_fil_grams(2), sim_fil_grams(3), fake_quiet_req - base, fake_loud_req);
+        snprintf(p, sizeof(p), "%s/v061_repro_antes.ppm", out); shot(p);
+        int bad = fake_quiet_req - base != 1;
+        fake_load_inventory(getenv("SPOOLS")); /* o carregamento disparado termina */
+        run(1000);
+        fprintf(stderr, "depois: T1=%s T2=%s T3=%s T4=%s  carregamentos pedidos=%d\n",
+                sim_fil_grams(0), sim_fil_grams(1), sim_fil_grams(2), sim_fil_grams(3), fake_quiet_req - base);
+        snprintf(p, sizeof(p), "%s/v061_repro_depois.ppm", out); shot(p);
+        const char *want[4] = {"513 g", "977 g", "578 g", "788 g"};
+        for (int i = 0; i < 4; i++) bad |= strcmp(sim_fil_grams(i), want[i]) != 0;
+        bad |= fake_quiet_req - base != 1; /* não fica recarregando */
+        fprintf(stderr, bad ? "REPRO: FALHOU\n" : "REPRO: ok\n");
+        return bad;
+    }
     snprintf(p, sizeof(p), "%s/v060_inicio.ppm", out); shot(p);
 
     ui_go_control(nullptr); run(300);

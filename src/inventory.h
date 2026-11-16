@@ -107,6 +107,7 @@ void inventory_start_task(void);
 
 bool inventory_busy(void);
 void inventory_request_refresh(void);
+void inventory_request_refresh_quiet(void); /* Início: sem toast */
 void inventory_request_catalog(void);
 void inventory_request_inspect(const char *uid);
 /* set_weight = false: não envia remaining_weight (não sobrescreve o consumo). */

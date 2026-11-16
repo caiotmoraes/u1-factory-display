@@ -508,13 +508,16 @@ static void refresh_home(const PrinterSnapshot *s) {
         const FeederChannel *c = &s->feeder.ch[i];
         const WarehouseSpool *w = (ui_inv && c->spool_id > 0) ? inventory_find(ui_inv, c->spool_id) : nullptr;
         const char *m = (w && w->info.material[0]) ? w->info.material : c->filament_type;
-        float g = (w && w->info.remaining_g >= 0) ? w->info.remaining_g : -1;
-        if (s->spool.valid && s->spool.id == c->spool_id && s->spool.remaining_g >= 0) g = s->spool.remaining_g;
+        /* peso = remaining_weight do estoque cruzado com filament_spool_id[i]
+         * (antes só o rolo ativo tinha peso enquanto o Armazém não fosse aberto) */
+        const float g = hud_channel_grams(ui_inv ? ui_inv->items : nullptr, ui_inv ? ui_inv->count : 0,
+                                          c->spool_id, s->spool.valid ? s->spool.id : 0,
+                                          s->spool.valid ? s->spool.remaining_g : -1);
         const char *cx = (w && w->info.color_hex[0]) ? w->info.color_hex : c->color_hex;
         const bool empty = c->spool_id <= 0 && !c->filament_detected && !m[0] && !cx[0];
         set_txt(fil_mat[i], empty ? "vazio" : (m[0] ? m : "—"));
         if (g >= 0) snprintf(tmp, sizeof(tmp), "%.0f g", (double)g);
-        else snprintf(tmp, sizeof(tmp), empty ? "" : "— g");
+        else snprintf(tmp, sizeof(tmp), empty ? "" : "-- g");
         set_txt(fil_g[i], tmp);
         set_txt_color(fil_g[i], g >= 0 && g < SPOOL_LOW_GRAMS ? COLOR_RED : COLOR_TEXT2);
         if (c->spool_id > 0) snprintf(tmp, sizeof(tmp), "#%d", c->spool_id);
@@ -585,6 +588,44 @@ static void fan_toggled(lv_event_t *e) {
                 : (i ? "Desligando a circulação…" : "Desligando a exaustão…"), false);
 }
 
+/* O Início precisa do estoque para o peso de T1–T4: carrega sozinho (sem toast)
+ * quando ainda não carregou, quando falta algum filament_spool_id[i] ou quando o
+ * mapeamento bico → rolo muda; e renova a cada 10 min. */
+static uint32_t home_inv_key = 0, home_inv_req_ms = 0;
+static bool home_inv_req = false;
+static void home_inventory_tick(const PrinterSnapshot *s) {
+    if (!ui_inv || !s->moonraker_ok || !s->feeder.valid) return;
+    if (ui_inv->status == INV_LOADING || inventory_busy()) return;
+    int ids[4];
+    bool any = false;
+    for (int i = 0; i < 4; i++) { ids[i] = s->feeder.ch[i].spool_id; any |= ids[i] > 0; }
+    if (!any) return;
+    const uint32_t key = hud_mapping_key(ids);
+    const uint32_t now = millis();
+    const uint32_t since = now - home_inv_req_ms;
+    const bool missing = ui_inv->status != INV_OK || hud_inventory_missing(ui_inv->items, ui_inv->count, ids);
+    if (key != home_inv_key && !missing && now - ui_inv->fetched_ms < 60000) {
+        home_inv_key = key; /* o Armazém acabou de carregar e já cobre o mapeamento */
+        home_inv_req = true;
+        home_inv_req_ms = ui_inv->fetched_ms;
+        return;
+    }
+    bool want;
+    if (key != home_inv_key) want = true;                                   /* mapeamento mudou */
+    else if (ui_inv->status != INV_OK) want = !home_inv_req || since > 20000; /* nunca/erro: tenta a cada 20 s */
+    else if (missing) want = since > 120000;                                  /* id fora do Spoolman: sem martelar */
+    else want = since > 600000;                                             /* pesos frescos */
+    if (!want) return;
+    home_inv_key = key;
+    home_inv_req = true;
+    home_inv_req_ms = now;
+    inventory_request_refresh_quiet();
+}
+
+#ifdef U1_SIM
+const char *sim_fil_grams(int i) { return lv_label_get_text(fil_g[i]); }
+#endif
+
 static void on_timer(lv_timer_t *) {
     bool dirty = false;
     uint32_t seq = ui_mr_seq;
@@ -601,6 +642,7 @@ static void on_timer(lv_timer_t *) {
         }
     }
     if (dirty) refresh_home(&ui_snap);
+    home_inventory_tick(&ui_snap);
     tick_home();
 
     /* ação do estoque: toast */
@@ -859,7 +901,7 @@ static void settings_refresh(void) {
              state_text(s->state, s->cancelled),
              s->moonraker_ok ? "conectado" : s->discovering ? "procurando…" : "sem conexão");
     lv_label_set_text(set_u1, t);
-    snprintf(t, sizeof(t), "U1 Factory Display v0.6.0\nRAM interna livre: %u KB\nPSRAM livre: %u KB",
+    snprintf(t, sizeof(t), "U1 Factory Display v0.6.1\nRAM interna livre: %u KB\nPSRAM livre: %u KB",
              (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
              (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
     lv_label_set_text(set_about, t);

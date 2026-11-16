@@ -48,6 +48,17 @@ static const char *TOP_RESPONSE =
     "\"filament\":{\"name\":\"X\",\"material\":\"PLA\",\"color_hex\":\"112233\","
     "\"vendor\":{\"name\":\"V\"}}}],\"error\":null}";
 
+/* v0.6.1: dados reais da U1 (16/11) — 4 rolos no Spoolman, filament_spool_id = [40,28,24,25] */
+static const char *REAL4 =
+    "{\"result\":{\"response\":["
+    "{\"id\":40,\"remaining_weight\":512.7,\"archived\":false,\"filament\":{\"material\":\"PETG\",\"color_hex\":\"1A1A1A\",\"vendor\":{\"name\":\"SUNLU\"}}},"
+    "{\"id\":28,\"remaining_weight\":977.1,\"archived\":false,\"filament\":{\"material\":\"PETG\",\"color_hex\":\"362111\",\"vendor\":{\"name\":\"SUNLU\"}}},"
+    "{\"id\":24,\"remaining_weight\":578.3,\"archived\":false,\"filament\":{\"material\":\"PLA\",\"color_hex\":\"FFFFFF\",\"vendor\":{\"name\":\"SUNLU\"}}},"
+    "{\"id\":25,\"remaining_weight\":787.7,\"archived\":false,\"filament\":{\"material\":\"PETG\",\"color_hex\":\"FF6A13\",\"vendor\":{\"name\":\"SUNLU\"}}}"
+    "],\"error\":null}}";
+
+static bool near(float a, float b) { return a > b - 0.05f && a < b + 0.05f; }
+
 static const char *STATUS =
     "{\"result\":{\"spoolman_connected\":true,\"spool_id\":40}}";
 
@@ -315,6 +326,34 @@ int main(void) {
             printf("    firmware-config fixture %zu bytes, %d dummy items\n", n, i);
             free(fat);
         }
+    }
+
+    /* --- v0.6.1: peso de T1–T4 no Início (bug: só T1 tinha peso) --- */
+    {
+        const int ids[4] = {40, 28, 24, 25};
+        WarehouseSpool inv4[8];
+        /* estoque ainda não carregado: só o rolo ativo (#40, lido por id) tem peso */
+        ok("hud-g-sem-estoque-t1", near(hud_channel_grams(NULL, 0, 40, 40, 512.7f), 512.7f));
+        ok("hud-g-sem-estoque-t2", hud_channel_grams(NULL, 0, 28, 40, 512.7f) < 0);
+        ok("hud-missing-sem-estoque", hud_inventory_missing(NULL, 0, ids));
+        int n4 = spool_parse_list(REAL4, strlen(REAL4), inv4, 8, err, sizeof(err));
+        ok("hud-real-n", n4 == 4);
+        ok("hud-missing-carregado", !hud_inventory_missing(inv4, n4, ids));
+        /* spool_id do Moonraker = 28 (só o ativo); os demais vêm do estoque */
+        const float want[4] = {512.7f, 977.1f, 578.3f, 787.7f};
+        for (int i = 0; i < 4; i++) {
+            char nm[32];
+            snprintf(nm, sizeof(nm), "hud-g-T%d", i + 1);
+            ok(nm, near(hud_channel_grams(inv4, n4, ids[i], 28, 977.1f), want[i]));
+        }
+        /* ativo com leitura mais nova prevalece; rolo fora do estoque = -1 */
+        ok("hud-g-ativo-novo", near(hud_channel_grams(inv4, n4, 28, 28, 970.0f), 970.0f));
+        ok("hud-g-ativo-sem-peso", near(hud_channel_grams(inv4, n4, 28, 28, -1), 977.1f));
+        ok("hud-g-desconhecido", hud_channel_grams(inv4, n4, 99, 28, 977.1f) < 0);
+        ok("hud-g-sem-id", hud_channel_grams(inv4, n4, 0, 28, 977.1f) < 0);
+        const int ids2[4] = {40, 28, 24, 99};
+        ok("hud-missing-novo-id", hud_inventory_missing(inv4, n4, ids2));
+        ok("hud-key-muda", hud_mapping_key(ids) != hud_mapping_key(ids2));
     }
 
     printf(fails ? "\n%d FALHA(S)\n" : "\nTodos os testes de spool/filtro passaram.\n", fails);

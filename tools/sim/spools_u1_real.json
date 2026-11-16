@@ -1,0 +1,6 @@
+[
+ {"id":40,"remaining_weight":512.7,"initial_weight":1000,"archived":false,"location":"U1 T1","filament":{"id":3,"name":"Black","material":"PETG","color_hex":"1A1A1A","vendor":{"name":"SUNLU"}}},
+ {"id":28,"remaining_weight":977.1,"initial_weight":1000,"archived":false,"location":"U1 T2","filament":{"id":4,"name":"Coffee Brown","material":"PETG","color_hex":"362111","vendor":{"name":"SUNLU"}}},
+ {"id":24,"remaining_weight":578.3,"initial_weight":1000,"archived":false,"location":"U1 T3","filament":{"id":5,"name":"White","material":"PLA","color_hex":"FFFFFF","vendor":{"name":"SUNLU"}}},
+ {"id":25,"remaining_weight":787.7,"initial_weight":1000,"archived":false,"location":"U1 T4","filament":{"id":6,"name":"Orange","material":"PETG","color_hex":"FF6A13","vendor":{"name":"SUNLU"}}}
+]

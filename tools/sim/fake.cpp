@@ -65,12 +65,21 @@ void fake_load_inventory(const char *path) {
     inv->fetched_ms = 1000;
     inv_seq++;
 }
+/* repro v0.6.1: boot sem estoque carregado (status IDLE, 0 rolos) */
+int fake_quiet_req = 0, fake_loud_req = 0;
+void fake_inventory_empty(void) {
+    if (!inv) inv = (InventorySnapshot *)calloc(1, sizeof(*inv));
+    memset(inv, 0, sizeof(*inv));
+    inv->status = INV_IDLE;
+    inv_seq++;
+}
 const WarehouseSpool *fake_spool(int id) { return inventory_find(inv, id); }
 
 bool inventory_busy(void) { return false; }
 void inventory_init(void) {}
 void inventory_start_task(void) {}
-void inventory_request_refresh(void) {}
+void inventory_request_refresh(void) { fake_loud_req++; }
+void inventory_request_refresh_quiet(void) { fake_quiet_req++; }
 void inventory_request_catalog(void) {}
 void inventory_request_inspect(const char *) {}
 void inventory_request_update(int, const char *, const char *, bool, float) {}

@@ -369,6 +369,33 @@ int hud_parse_extruder_name(const char *name) {
     return 0;
 }
 
+static const WarehouseSpool *find_id(const WarehouseSpool *items, int count, int id) {
+    if (!items || id <= 0) return NULL;
+    for (int i = 0; i < count; i++)
+        if (items[i].info.id == id) return &items[i];
+    return NULL;
+}
+
+float hud_channel_grams(const WarehouseSpool *items, int count, int spool_id,
+                        int active_id, float active_g) {
+    if (spool_id <= 0) return -1;
+    if (active_id == spool_id && active_g >= 0) return active_g;
+    const WarehouseSpool *w = find_id(items, count, spool_id);
+    return (w && w->info.remaining_g >= 0) ? w->info.remaining_g : -1;
+}
+
+bool hud_inventory_missing(const WarehouseSpool *items, int count, const int ids[4]) {
+    for (int i = 0; i < 4; i++)
+        if (ids[i] > 0 && !find_id(items, count, ids[i])) return true;
+    return false;
+}
+
+uint32_t hud_mapping_key(const int ids[4]) {
+    uint32_t h = 2166136261u;
+    for (int i = 0; i < 4; i++) { h ^= (uint32_t)ids[i]; h *= 16777619u; }
+    return h;
+}
+
 int hud_active_spool_id(const int filament_spool_id[4], int active_extruder) {
     if (!filament_spool_id) return 0;
     if (active_extruder < 0 || active_extruder > 3) active_extruder = 0;

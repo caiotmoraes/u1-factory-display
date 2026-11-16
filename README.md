@@ -36,6 +36,11 @@ ESP32_IO_Expander 1.1.0, esp-lib-utils 0.2.0, LVGL 8.4.0, ArduinoJson 7.
 Macros da placa: `-DESP_PANEL_BOARD_DEFAULT_USE_SUPPORTED=1
 -DBOARD_WAVESHARE_ESP32_S3_TOUCH_LCD_7`. CDC nativo no boot ligado e UART0 reservada ao PN532. O CH343 continua sendo a porta de gravação.
 
+## O que esta versão faz (v0.6.1)
+
+- Correção: no cartão Filamentos só T1 tinha peso. O peso vinha do estoque, mas o estoque só carregava ao abrir Armazém/NFC; até lá só o rolo ativo (consultado por id) aparecia. Agora o Início carrega o estoque sozinho (sem toast) no boot, quando falta algum `filament_spool_id[i]` ou quando o mapeamento muda, e renova a cada 10 min; cada bico mostra o `remaining_weight` do seu rolo e "-- g" enquanto carrega.
+- Repro: `tests/test_spool_parse.cpp` (hud-g-*) e `REPRO=1` no simulador com os dados reais (`tools/sim/spools_u1_real.json`).
+
 ## O que esta versão faz (v0.6.0)
 
 - Tema claro "widgets": fundo #F2F0EC, cartões brancos (raio 16, borda suave, sem sombra), texto #2E3440, destaque #5B8DEF, em todas as telas, diálogos e toasts.

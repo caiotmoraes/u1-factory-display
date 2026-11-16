@@ -3,6 +3,7 @@
 #include "spool_parse.h"
 #include <stddef.h>
 #include <stdbool.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -69,6 +70,16 @@ bool spool_build_link_info(const WarehouseSpool *s, char *json, size_t n, char *
  * plugin Moonraker (que na U1 costuma ser null mesmo com rolos associados). */
 int hud_parse_extruder_name(const char *name);
 int hud_active_spool_id(const int filament_spool_id[4], int active_extruder);
+
+/* Peso do cartão Filamentos (Início) do bico com filament_spool_id = spool_id:
+ * remaining_weight do estoque cruzado por id. O rolo ativo (lido por id a cada
+ * poll do Moonraker) prevalece por ser mais recente. -1 = desconhecido. */
+float hud_channel_grams(const WarehouseSpool *items, int count, int spool_id,
+                        int active_id, float active_g);
+/* true se algum filament_spool_id[i] > 0 não está no estoque carregado. */
+bool hud_inventory_missing(const WarehouseSpool *items, int count, const int ids[4]);
+/* Chave do mapeamento bico → rolo (muda quando qualquer filament_spool_id muda). */
+uint32_t hud_mapping_key(const int ids[4]);
 
 #ifdef __cplusplus
 }

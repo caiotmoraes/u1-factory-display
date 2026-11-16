@@ -45,6 +45,7 @@ static char nfc_auto_uid[24];
 static ControlOp control_op;
 static int control_value;
 static char control_path[192];
+static bool refresh_quiet = false;
 static bool refresh_wanted;
 static ControlFiles *control_files; /* PSRAM: ~4,6 KB */
 static ControlFiles *control_scratch; /* PSRAM: montagem da lista */
@@ -437,18 +438,19 @@ static bool require_external(const char *ip, uint16_t port, char *err, size_t er
 }
 
 /* ---- REFRESH ---- */
-static void do_refresh(void) {
+/* quiet = carregamento automático do Início: não mexe na ação/toast. */
+static void do_refresh(bool quiet = false) {
     char ip[16] = {0};
     uint16_t port = 7125;
     char err[160] = {0};
     if (!WiFi.isConnected()) {
         inv_publish(INV_OFFLINE, "Sem Wi-Fi");
-        act_set(AR_ERR, "Sem Wi-Fi");
+        if (!quiet) act_set(AR_ERR, "Sem Wi-Fi");
         return;
     }
     if (!endpoint(ip, &port)) {
         inv_publish(INV_OFFLINE, "U1 não encontrada na rede");
-        act_set(AR_ERR, "U1 não encontrada na rede");
+        if (!quiet) act_set(AR_ERR, "U1 não encontrada na rede");
         return;
     }
     inv_publish(INV_LOADING, nullptr);
@@ -456,13 +458,13 @@ static void do_refresh(void) {
     if (!proxy(ip, port, "GET", "/v1/spool?allow_archived=true", nullptr, 12000, &len, err, sizeof(err))) {
         const bool offline = !strncmp(err, "Impressora offline", 18);
         inv_publish(offline ? INV_OFFLINE : INV_ERROR, err[0] ? err : "Falha ao ler o estoque");
-        act_set(AR_ERR, err[0] ? err : "Falha ao ler o estoque");
+        if (!quiet) act_set(AR_ERR, err[0] ? err : "Falha ao ler o estoque");
         return;
     }
     WarehouseSpool *tmp = (WarehouseSpool *)psram_z(sizeof(WarehouseSpool) * WAREHOUSE_MAX);
     if (!tmp) {
         inv_publish(INV_ERROR, "Sem memória para o estoque");
-        act_set(AR_ERR, "Sem memória");
+        if (!quiet) act_set(AR_ERR, "Sem memória");
         return;
     }
     int n = spool_parse_list(http_buf, (size_t)len, tmp, WAREHOUSE_MAX, err, sizeof(err));
@@ -475,7 +477,7 @@ static void do_refresh(void) {
             snprintf(err, sizeof(err), "%s (%d bytes recebidos). Toque Atualizar.", base, len);
         }
         inv_publish(INV_ERROR, err);
-        act_set(AR_ERR, err[0] ? err : "JSON inválido");
+        if (!quiet) act_set(AR_ERR, err[0] ? err : "JSON inválido");
         return;
     }
     int active = 0;
@@ -511,7 +513,7 @@ static void do_refresh(void) {
 
     char msg[80];
     snprintf(msg, sizeof(msg), "Estoque: %d rolo%s", n, n == 1 ? "" : "s");
-    act_set(AR_OK, msg);
+    if (!quiet) act_set(AR_OK, msg);
     Serial.printf("[inventory] %d rolos, ativo=%d\n", n, active);
 }
 
@@ -1617,9 +1619,10 @@ static void inv_task(void *) {
         xSemaphoreTake(mutex, portMAX_DELAY);
         k = pending;
         pending = ACT_NONE;
-        if (k == ACT_NONE && refresh_wanted) k = ACT_REFRESH;
-        if (k == ACT_REFRESH) refresh_wanted = false;
-        if (k != ACT_NONE) {
+        bool quiet = false;
+        if (k == ACT_NONE && refresh_wanted) { k = ACT_REFRESH; quiet = refresh_quiet; }
+        if (k == ACT_REFRESH) { refresh_wanted = false; refresh_quiet = false; }
+        if (k != ACT_NONE && !quiet) {
             g_act.kind = k;
             g_act.state = AR_RUNNING;
             g_act.message[0] = 0;
@@ -1627,7 +1630,8 @@ static void inv_task(void *) {
             g_act.seq = act_seq;
         }
         xSemaphoreGive(mutex);
-        if (k != ACT_NONE) run_kind(k);
+        if (k == ACT_REFRESH && quiet) do_refresh(true);
+        else if (k != ACT_NONE) run_kind(k);
     }
 }
 
@@ -1682,7 +1686,19 @@ bool inventory_busy(void) {
     return b;
 }
 
-void inventory_request_refresh(void) { enqueue(ACT_REFRESH); }
+void inventory_request_refresh(void) {
+    if (mutex) { xSemaphoreTake(mutex, portMAX_DELAY); refresh_quiet = false; xSemaphoreGive(mutex); }
+    enqueue(ACT_REFRESH);
+}
+
+/* Carregamento em segundo plano (Início): sem toast, sem ocupar a ação. */
+void inventory_request_refresh_quiet(void) {
+    if (!mutex) return;
+    xSemaphoreTake(mutex, portMAX_DELAY);
+    if (!refresh_wanted && pending != ACT_REFRESH) { refresh_wanted = true; refresh_quiet = true; }
+    xSemaphoreGive(mutex);
+    if (task_h) xTaskNotifyGive(task_h);
+}
 void inventory_request_catalog(void) { enqueue(ACT_CATALOG); }
 
 void inventory_request_inspect(const char *uid) {
