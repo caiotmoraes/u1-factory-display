@@ -175,6 +175,8 @@ A placa tem **dois** Type-C. Use o da **UART** (chip CH343), não o USB-OTG.
 
 1. Instale o [PlatformIO Core](https://platformio.org/install/cli) (ou a
    extensão no VS Code / Cursor) e o driver **CH343**.
+   No Python usado pelo PlatformIO, instale o Pillow (`python -m pip install Pillow`)
+   para gerar os assets do painel a partir dos PNGs do repositório.
 2. Abra um terminal na pasta `firmware/`. Na primeira vez o PlatformIO baixa
    a toolchain (alguns minutos).
 3. Prepare o Wi-Fi (`secrets.h` ou deixe vazio e use o portal depois).
