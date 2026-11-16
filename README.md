@@ -36,6 +36,17 @@ ESP32_IO_Expander 1.1.0, esp-lib-utils 0.2.0, LVGL 8.4.0, ArduinoJson 7.
 Macros da placa: `-DESP_PANEL_BOARD_DEFAULT_USE_SUPPORTED=1
 -DBOARD_WAVESHARE_ESP32_S3_TOUCH_LCD_7`. CDC nativo no boot ligado e UART0 reservada ao PN532. O CH343 continua sendo a porta de gravação.
 
+## O que esta versão faz (v0.7.0) — unificação com o Spool Factory 2.0
+Tela e app Android seguem a mesma especificação, **U1 Spool Spec v1** (pasta `spec/`, idêntica nos dois repositórios).
+- **`card_uids` canônico:** grava sempre `"\"A,B\""` (hex maiúsculo, sem duplicatas). Ao associar uma tag, listas JSON e textos legados são migrados; UIDs inválidos ficam no fim e aparecem na ficha como "Tag inválida no cadastro". `tags[].uid` não é copiado.
+- **Leitura tolerante e comparação exata:** lista, texto, texto com lista, espaços e minúsculas. Corrige o cadastro que confirmava a tag por substring (F1) e o corte em 96 caracteres (F2: agora 192, até 8 tags).
+- **`CARD_UID` da U1:** aceita lista `[83,245,…]` ou texto `"83 245 …"`. `CARD_TYPE` = `M1` para Mifare Classic, senão `NTAG`.
+- **Fluxos iguais ao app:** ler tag conhecida já arma a inserção, com contagem regressiva e Cancelar; tag desconhecida oferece Cadastrar rolo (a tag vai junto no cadastro) ou Associar; excluir tem **uma** confirmação (digitar o número + "Excluir definitivamente"), e o rolo é relido e conferido antes de apagar; confirmação da inserção com 4 leituras em 20 s.
+- **Prazo de inserção configurável** (NFC → 1, 2, 3, 5 ou 10 min; padrão 3 min, salvo na NVS).
+- **Carregar/retirar:** janela total de 240 s (igual ao app), sem repetir o comando; confirma por `channel_state`.
+- **Textos do catálogo comum** (`spec/strings.json` → `src/strings_pt.h` via `python3 tools/gen_strings.py`): T1–T4, "Ativar no alimentador", "Associar tag", ventiladores Peça/Exaustão/Circulação/Câmara.
+- Testes de host novos com as fixtures compartilhadas (`tests/test_spec_fixtures.cpp`).
+
 ## O que esta versão faz (v0.6.1)
 
 - Correção: no cartão Filamentos só T1 tinha peso. O peso vinha do estoque, mas o estoque só carregava ao abrir Armazém/NFC; até lá só o rolo ativo (consultado por id) aparecia. Agora o Início carrega o estoque sozinho (sem toast) no boot, quando falta algum `filament_spool_id[i]` ou quando o mapeamento muda, e renova a cada 10 min; cada bico mostra o `remaining_weight` do seu rolo e "-- g" enquanto carrega.

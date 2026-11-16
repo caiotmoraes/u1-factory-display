@@ -31,11 +31,13 @@ python3 "$ROOT/tools/sim/thumb_demo.py" $B/thumb.rgb565
 THUMB=$B/thumb.rgb565 $B/u1sim $B
 # v0.6.1: peso de T1–T4 com o estoque carregando depois do boot (dados reais da U1)
 REPRO=1 SPOOLS="$ROOT/tools/sim/spools_u1_real.json" THUMB=$B/thumb.rgb565 $B/u1sim $B
+# v0.7.0: telas da unificação (U1 Spool Spec v1)
+V070=1 THUMB=$B/thumb.rgb565 $B/u1sim $B
 python3 - "$B" "$OUT" <<'PY'
 import sys, glob, os
 from PIL import Image
 b, out = sys.argv[1], sys.argv[2]
-for p in sorted(glob.glob(b + '/v06*.ppm')):
+for p in sorted(glob.glob(b + '/v06*.ppm') + glob.glob(b + '/v07*.ppm')):
     d = os.path.join(out, os.path.basename(p)[:-4] + '.png')
     Image.open(p).save(d)
     print(d)

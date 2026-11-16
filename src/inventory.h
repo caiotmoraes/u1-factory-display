@@ -118,6 +118,11 @@ void inventory_request_create(const CreateSpoolReq *req);
 void inventory_request_delete(int id, const char *identity);
 void inventory_request_assign(int channel, int spool_id);
 bool inventory_request_nfc_auto(int spool_id, const char *uid);
+/* Spec v1: CARD_TYPE "M1" para Mifare Classic, senão "NTAG". */
+bool inventory_request_nfc_auto_typed(int spool_id, const char *uid, bool mifare_classic);
+/* Prazo para inserir o filamento após a leitura (s, 60–600, padrão 180; salvo na NVS). */
+int inventory_insert_deadline(void);
+void inventory_set_insert_deadline(int seconds);
 void inventory_cancel_nfc_auto(void);
 void inventory_request_feed(int channel, bool load);
 

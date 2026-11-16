@@ -25,6 +25,12 @@ else
       "$ROOT/src/history.cpp" \
       -o /tmp/test_spool_parse
   /tmp/test_spool_parse
+  echo
+  echo "== U1 Spool Spec v1 (spec/fixtures/uids.json) =="
+  "$GXX" -std=c++17 -Wall -Wextra -Werror -I "$ROOT/src" -I "$AJ" \
+      "$ROOT/tests/test_spec_fixtures.cpp" "$ROOT/src/spool_parse.cpp" \
+      -o /tmp/test_spec_fixtures
+  /tmp/test_spec_fixtures "$ROOT/spec/fixtures/uids.json"
 fi
 echo
 echo "== protocolo Moonraker / Spoolman (FakeMoonraker) =="

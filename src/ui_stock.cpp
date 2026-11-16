@@ -1,4 +1,5 @@
 #include "ui_priv.h"
+#include "strings_pt.h"
 #include <esp_heap_caps.h>
 
 /* ---- ARMAZÉM, FICHA, FORMULÁRIOS, DIÁRIO, WIFI ---- */
@@ -362,7 +363,14 @@ static char nfc_last_uid[24];
 static char nfc_matched_uid[21];
 static int nfc_matched_spool;
 static bool nfc_auto_active;
+static bool nfc_matched_m1;            /* Spec v1: CARD_TYPE M1 (Mifare Classic) */
 static uint32_t nfc_auto_seq;
+static uint32_t nfc_auto_started;      /* contagem regressiva do prazo de inserção */
+static char nfc_auto_head[120];        /* "#id · Marca Material · Nome" */
+static lv_obj_t *nfc_cancel_btn, *nfc_register_btn;
+static char new_spool_uid[24];         /* tag lida e não cadastrada → Cadastrar rolo */
+static void nfc_start_auto(void);
+static lv_obj_t *new_uid_lbl;
 static bool new_spool_wait;
 static uint32_t new_spool_seq;
 
@@ -379,20 +387,8 @@ static void spool_line(const WarehouseSpool *s, char *out, size_t n) {
              s->info.material[0] ? s->info.material : "?", color);
 }
 
-static bool uid_in_list(const char *list, const char *norm) {
-    const char *p = list;
-    while (p && *p) {
-        char tok[24] = {0};
-        int k = 0;
-        while (*p && *p != ',' && k < 23) tok[k++] = *p++;
-        while (*p && *p != ',') p++;
-        if (*p == ',') p++;
-        char tn[24] = {0};
-        spool_normalize_uid(tok, tn, sizeof(tn));
-        if (tn[0] && !strcmp(tn, norm)) return true;
-    }
-    return false;
-}
+/* Spec v1: pertença exata ao conjunto. */
+static bool uid_in_list(const char *list, const char *norm) { return spool_uid_listed(list, norm); }
 
 /* Rolo do estoque local com este UID (normalizado), ou nullptr. */
 static const WarehouseSpool *spool_by_uid(const char *norm, int *count) {
@@ -451,7 +447,7 @@ static BindReq bind_req;
 
 static void do_bind_confirmed(void *) {
     inventory_request_bind(bind_req.id, bind_req.uid);
-    ui_toast("Associando tag no Spoolman...", false);
+    ui_toast(S_COMMON_SAVING, false);
 }
 
 /* Confere duplicidade no estoque local e pede confirmação. */
@@ -466,29 +462,25 @@ static void ask_bind(int id, const char *raw_uid) {
     const WarehouseSpool *owner = spool_by_uid(norm, &count);
     char msg[200];
     if (owner && owner->info.id == id) {
-        snprintf(msg, sizeof(msg), "A tag %s já está associada ao rolo #%d.", norm, id);
+        snprintf(msg, sizeof(msg), S_BIND_ALREADY, norm, id);
         nfc_set_status(msg);
         if (!nfc_status) ui_toast(msg, false);
         return;
     }
     if (owner) {
-        snprintf(msg, sizeof(msg), "Tag %s já associada ao rolo #%d. Nenhuma tag foi transferida.",
-                 norm, owner->info.id);
+        snprintf(msg, sizeof(msg), owner->archived ? S_UID_TAKEN_ARCHIVED : S_UID_TAKEN, owner->info.id);
         nfc_set_status(msg);
         if (!nfc_status) ui_toast(msg, true);
         return;
     }
     bind_req.id = id;
     ui_cpy(bind_req.uid, sizeof(bind_req.uid), norm);
-    const WarehouseSpool *s = inventory_find(ui_inv, id);
-    char line[96];
-    if (s) spool_line(s, line, sizeof(line));
-    else snprintf(line, sizeof(line), "#%d", id);
-    snprintf(msg, sizeof(msg), "Associar a tag %s ao rolo %s? Os UIDs já gravados no rolo serão mantidos.",
-             norm, line);
-    ui_confirm("Associar tag", msg, do_bind_confirmed, nullptr);
+    snprintf(msg, sizeof(msg), S_BIND_CONFIRM, norm, id);
+    ui_confirm(S_BIND_TITLE, msg, do_bind_confirmed, nullptr);
 }
 
+/* Spec v1 · fluxo "Ler tag": desconhecida → Cadastrar rolo / Associar; arquivada ou
+ * duplicada → erro; conhecida → cartão do rolo + armar a inserção (contagem regressiva). */
 static void show_lookup(const NfcResult &r) {
     char norm[24] = {0};
     spool_normalize_uid(r.uid, norm, sizeof(norm));
@@ -498,40 +490,61 @@ static void show_lookup(const NfcResult &r) {
     char text[320];
     nfc_matched_spool = 0;
     if (nfc_auto_button) lv_obj_add_state(nfc_auto_button, LV_STATE_DISABLED);
+    if (nfc_register_btn) lv_obj_add_flag(nfc_register_btn, LV_OBJ_FLAG_HIDDEN);
     if (!ui_inv || ui_inv->status != INV_OK) {
-        snprintf(text, sizeof(text), "UID: %s\nEstoque não carregado (%s). Toque Atualizar no Armazém.",
-                 norm, ui_inv && ui_inv->error_msg[0] ? ui_inv->error_msg : "sem dados");
+        snprintf(text, sizeof(text), "UID: %s\n%s (%s).", norm, S_CONN_SPOOLMAN_DOWN,
+                 ui_inv && ui_inv->error_msg[0] ? ui_inv->error_msg : "sem dados");
     } else if (!s) {
-        snprintf(text, sizeof(text), "UID lido: %s\nTag não associada a nenhum rolo.\n"
-                 "Escolha o rolo abaixo e toque Associar esta tag.", norm);
+        snprintf(text, sizeof(text), S_NFC_UNKNOWN, norm);
         if (nfc_link_btn) lv_obj_clear_flag(nfc_link_btn, LV_OBJ_FLAG_HIDDEN);
+        if (nfc_register_btn) lv_obj_clear_flag(nfc_register_btn, LV_OBJ_FLAG_HIDDEN);
+        ui_cpy(new_spool_uid, sizeof(new_spool_uid), norm);
+    } else if (count > 1) {
+        snprintf(text, sizeof(text), "UID %s\n%s", norm, S_UID_DUPLICATE);
+    } else if (s->archived) {
+        char idn[96];
+        snprintf(idn, sizeof(idn), "#%d · %s %s · %s", s->info.id, s->info.vendor, s->info.material, s->info.name);
+        snprintf(text, sizeof(text), S_NFC_ARCHIVED, idn);
     } else {
-        char line[96], rem[24];
-        spool_line(s, line, sizeof(line));
+        char rem[24];
         if (s->info.remaining_g >= 0) snprintf(rem, sizeof(rem), "%.0f g", s->info.remaining_g);
-        else snprintf(rem, sizeof(rem), "desconhecido");
-        snprintf(text, sizeof(text), "UID lido: %s (tag: %s)\nRolo %s%s  cor #%s\nRestante: %s%s%s",
-                 norm, s->card_uids, line, s->archived ? " (arquivado)" : "", s->info.color_hex, rem,
-                 r.spool_id > 0 ? "\nNDEF na tag: Spoolman #" : "",
-                 "");
-        if (r.spool_id > 0) {
-            size_t l = strlen(text);
-            snprintf(text + l, sizeof(text) - l, "%d", r.spool_id);
+        else snprintf(rem, sizeof(rem), "— g");
+        snprintf(nfc_auto_head, sizeof(nfc_auto_head), "#%d · %s %s · %s · %s",
+                 s->info.id, s->info.vendor, s->info.material, s->info.name, rem);
+        nfc_matched_spool = s->info.id;
+        ui_cpy(nfc_matched_uid, sizeof(nfc_matched_uid), norm);
+        nfc_matched_m1 = !r.ntag && strlen(norm) == 8;
+        if (ui_snap.feeder.valid ? ui_snap.feeder.busy_print
+                                 : (!strcmp(ui_snap.print_stats, "printing") || !strcmp(ui_snap.print_stats, "paused"))) {
+            snprintf(text, sizeof(text), "%s\nUID %s\n%s", nfc_auto_head, norm, S_NFC_PRINTING);
+        } else {
+            snprintf(text, sizeof(text), "%s\nUID %s", nfc_auto_head, norm);
+            nfc_set_status(text);
+            nfc_start_auto();
+            for (int i = 0; nfc_dd && i < nfc_dd_n; i++)
+                if (nfc_dd_ids[i] == s->info.id) lv_dropdown_set_selected(nfc_dd, i);
+            return;
         }
-        if (count > 1) {
-            size_t l = strlen(text);
-            snprintf(text + l, sizeof(text) - l, "\nAtenção: UID repetido em %d rolos.", count);
-        }
-        if (!s->archived && count == 1 && r.ntag) {
-            nfc_matched_spool = s->info.id;
-            ui_cpy(nfc_matched_uid, sizeof(nfc_matched_uid), norm);
-            if (nfc_auto_button) lv_obj_clear_state(nfc_auto_button, LV_STATE_DISABLED);
-        }
+        if (nfc_auto_button) lv_obj_clear_state(nfc_auto_button, LV_STATE_DISABLED);
         /* seleciona o rolo encontrado na lista */
         for (int i = 0; nfc_dd && i < nfc_dd_n; i++)
             if (nfc_dd_ids[i] == s->info.id) lv_dropdown_set_selected(nfc_dd, i);
     }
     nfc_set_status(text);
+}
+
+static void nfc_start_auto(void) {
+    if (nfc_matched_spool <= 0) return;
+    if (!inventory_request_nfc_auto_typed(nfc_matched_spool, nfc_matched_uid, nfc_matched_m1)) {
+        nfc_set_status("Estoque ocupado. Tente novamente.");
+        return;
+    }
+    nfc_auto_active = true;
+    nfc_auto_seq = ui_act_seq;
+    nfc_auto_started = lv_tick_get();
+    if (nfc_auto_button) lv_obj_add_state(nfc_auto_button, LV_STATE_DISABLED);
+    if (nfc_cancel_btn) lv_obj_clear_flag(nfc_cancel_btn, LV_OBJ_FLAG_HIDDEN);
+    if (nfc_link_btn) lv_obj_add_flag(nfc_link_btn, LV_OBJ_FLAG_HIDDEN);
 }
 
 static void nfc_tick() {
@@ -552,11 +565,30 @@ static void nfc_tick() {
             nfc_set_status(text);
         }
     }
-    if (nfc_status && nfc_auto_active && ui_act_seq != nfc_auto_seq &&
-        ui_act.kind == ACT_NFC_AUTO) {
-        nfc_auto_seq = ui_act_seq;
-        if (ui_act.message[0]) lv_label_set_text(nfc_status, ui_act.message);
-        if (ui_act.state == AR_OK || ui_act.state == AR_ERR) nfc_auto_active = false;
+    if (nfc_status && nfc_auto_active && ui_act.kind == ACT_NFC_AUTO) {
+        static uint32_t last_draw;
+        const bool changed = ui_act_seq != nfc_auto_seq;
+        if (changed || lv_tick_elaps(last_draw) > 900) {
+            last_draw = lv_tick_get();
+            nfc_auto_seq = ui_act_seq;
+            char t[320];
+            const bool done = ui_act.state == AR_OK || ui_act.state == AR_ERR;
+            const bool waiting = !done && !strcmp(ui_act.message, S_NFC_INSERT_ONE);
+            if (waiting) {
+                int left = inventory_insert_deadline() - (int)(lv_tick_elaps(nfc_auto_started) / 1000);
+                if (left < 0) left = 0;
+                char r[32];
+                snprintf(r, sizeof(r), S_NFC_REMAINING, left);
+                snprintf(t, sizeof(t), "%s\n%s · %s", nfc_auto_head, S_NFC_INSERT, r);
+            } else {
+                snprintf(t, sizeof(t), "%s\n%s", nfc_auto_head, ui_act.message[0] ? ui_act.message : S_NFC_CONFIRMING);
+            }
+            lv_label_set_text(nfc_status, t);
+            if (done) {
+                nfc_auto_active = false;
+                if (nfc_cancel_btn) lv_obj_add_flag(nfc_cancel_btn, LV_OBJ_FLAG_HIDDEN);
+            }
+        }
     }
     /* Rolo recém-cadastrado: oferece associar a tag logo em seguida. */
     if (new_spool_wait && ui_act_seq != new_spool_seq && ui_act.kind == ACT_CREATE &&
@@ -614,6 +646,7 @@ static void open_nfc_for(int spool_id, const char *intro) {
         if (nfc_auto_active) inventory_cancel_nfc_auto();
         nfc_auto_active = false;
         nfc_status = nfc_dd = nfc_adv = nfc_link_btn = nfc_auto_button = nfc_uid_ta = nullptr;
+        nfc_cancel_btn = nfc_register_btn = nullptr;
     }, LV_EVENT_DELETE, nullptr);
     ui_style_label(nfc_status, &font_ui_14, COLOR_CREAM);
     lv_label_set_long_mode(nfc_status, LV_LABEL_LONG_WRAP);
@@ -625,9 +658,28 @@ static void open_nfc_for(int spool_id, const char *intro) {
 
     ui_make_btn(box, 8, 128, 190, 36, "Ler tag", COLOR_MINT, 0x081725,
                 [](lv_event_t *) { scan_nfc(nfc_status, NFC_LOOKUP, 0); }, nullptr);
-    nfc_link_btn = ui_make_btn(box, 210, 128, 300, 36, "Associar esta tag", COLOR_GOLD, 0x081725,
+    nfc_link_btn = ui_make_btn(box, 210, 128, 240, 36, "Associar esta tag", COLOR_GOLD, 0x081725,
                                [](lv_event_t *) { ask_bind(nfc_selected_id(), nfc_last_uid); }, nullptr);
     lv_obj_add_flag(nfc_link_btn, LV_OBJ_FLAG_HIDDEN);
+    nfc_register_btn = ui_make_btn(box, 462, 128, 238, 36, S_NFC_REGISTER, COLOR_ACCENT, COLOR_ON_ACCENT,
+                                   [](lv_event_t *) {
+                                       char uid[24];
+                                       ui_cpy(uid, sizeof(uid), new_spool_uid);
+                                       ui_close_overlays();
+                                       ui_new_spool_open();
+                                       ui_cpy(new_spool_uid, sizeof(new_spool_uid), uid);
+                                       if (new_uid_lbl) {
+                                           char t[80];
+                                           snprintf(t, sizeof(t), "Tag NFC: %s (gravada no cadastro)", uid);
+                                           lv_label_set_text(new_uid_lbl, t);
+                                       }
+                                   }, nullptr);
+    lv_obj_add_flag(nfc_register_btn, LV_OBJ_FLAG_HIDDEN);
+    nfc_cancel_btn = ui_make_btn(box, 210, 128, 240, 36, S_COMMON_CANCEL, COLOR_SURFACE, COLOR_RED,
+                                 [](lv_event_t *) {
+                                     if (nfc_auto_active) inventory_cancel_nfc_auto();
+                                 }, nullptr);
+    lv_obj_add_flag(nfc_cancel_btn, LV_OBJ_FLAG_HIDDEN);
 
     lv_obj_t *l = lv_label_create(box);
     ui_style_label(l, &font_ui_14, COLOR_MUTED);
@@ -671,14 +723,7 @@ static void open_nfc_for(int spool_id, const char *intro) {
     }, nullptr);
     nfc_auto_button = ui_make_btn(nfc_adv, 268, 56, 300, 36, "Inserir no alimentador",
                                   COLOR_CARD, COLOR_MINT, [](lv_event_t *) {
-        if (!inventory_request_nfc_auto(nfc_matched_spool, nfc_matched_uid)) {
-            nfc_set_status("Estoque ocupado. Tente novamente.");
-            return;
-        }
-        nfc_auto_active = true;
-        nfc_auto_seq = ui_act_seq;
-        lv_obj_add_state(nfc_auto_button, LV_STATE_DISABLED);
-        nfc_set_status("Verificando os alimentadores. Aguarde para inserir.");
+        nfc_start_auto();
     }, nullptr);
     lv_obj_add_state(nfc_auto_button, LV_STATE_DISABLED);
 }
@@ -784,31 +829,33 @@ static void do_save_edit(void *) {
     float rem = 0;
     if (setw && ta_weight) rem = strtof(lv_textarea_get_text(ta_weight), nullptr);
     inventory_request_update(ficha_id, loc, com, setw, rem);
-    ui_toast("Salvando...", false);
+    ui_toast(S_COMMON_SAVING, false);
 }
 
 static void ask_save_edit(lv_event_t *) {
-    ui_confirm("Salvar",
-               "Salvar no Spoolman? Isso não movimenta a impressora.",
-               do_save_edit, nullptr);
+    ui_confirm(S_COMMON_SAVE, S_SAVE_CONFIRM, do_save_edit, nullptr);
 }
 
 static void open_bind(lv_event_t *) {
-    open_nfc_for(ficha_id, "Aproxime a tag deste rolo e toque Ler e associar.");
+    static char intro[96];
+    snprintf(intro, sizeof(intro), S_BIND_TAP, ficha_id);
+    open_nfc_for(ficha_id, intro);
 }
 
 static void do_assign_ok(void *) {
     inventory_request_assign(form_channel, ficha_id);
-    ui_toast("Associando ao feeder...", false);
+    ui_toast(S_COMMON_SAVING, false);
 }
 static void do_feed_ok(void *) {
     inventory_request_feed(form_channel, form_load);
-    ui_toast(form_load ? "Carregando..." : "Retirando...", false);
+    static char m[48];
+    snprintf(m, sizeof(m), form_load ? S_FEED_LOADING : S_FEED_UNLOADING, form_channel + 1);
+    ui_toast(m, false);
 }
 
 static void pick_channel_then(bool assign, bool load, lv_event_t *) {
     form_load = load;
-    lv_obj_t *box = ui_overlay_box(assign ? "Ativar rolo" : (load ? "Carregar" : "Retirar"), 600, 340);
+    lv_obj_t *box = ui_overlay_box(assign ? S_ASSIGN_TITLE : (load ? S_FEED_LOAD : S_FEED_UNLOAD), 600, 340);
     if (ui_inv && ui_inv->external_mode == 2) {
         lv_obj_t *w = lv_label_create(box);
         ui_style_label(w, &font_ui_14, COLOR_ALERT);
@@ -820,12 +867,12 @@ static void pick_channel_then(bool assign, bool load, lv_event_t *) {
     lv_obj_t *h = lv_label_create(box);
     ui_style_label(h, &font_ui_14, COLOR_CREAM);
     lv_obj_set_pos(h, 8, 80);
-    lv_label_set_text(h, "Escolha o feeder (1-4):");
+    lv_label_set_text(h, S_ASSIGN_PICK);
 for (int i = 0; i < 4; i++) {
         char lab[40];
         const FeederChannel *fc = ui_snap.feeder.valid ? &ui_snap.feeder.ch[i] : nullptr;
-        snprintf(lab, sizeof(lab), "F%d %s", i + 1,
-                 (fc && fc->filament_detected) ? "fil." : (fc && !fc->module_exist) ? "n/a" : "");
+        snprintf(lab, sizeof(lab), "T%d%s", i + 1,
+                 (fc && fc->filament_detected) ? " ●" : (fc && !fc->module_exist) ? " —" : "");
         int x = 16 + i * 140;
         /* store assign/load in user: (assign?100:0)+(load?10:0)+ch  */
         int token = (assign ? 100 : 0) + (load ? 10 : 0) + i;
@@ -838,17 +885,15 @@ for (int i = 0; i < 4; i++) {
                         form_channel = ch;
                         form_load = ld;
                         if (asg) {
-                            ui_confirm("Ativar rolo",
-                                       "Confirme que este é o rolo que está no alimentador escolhido. A associação é enviada à U1.",
-                                       do_assign_ok, nullptr);
+                            static char m[160];
+                            snprintf(m, sizeof(m), S_ASSIGN_CONFIRM, ch + 1);
+                            ui_confirm(S_ASSIGN_TITLE, m, do_assign_ok, nullptr);
                         } else {
-                            ui_confirm(ld ? "Carregar" : "Retirar",
-                                       "A U1 pode aquecer o bico e movimentar o filamento. Continuar?",
-                                       do_feed_ok, nullptr);
+                            ui_confirm(ld ? S_FEED_LOAD : S_FEED_UNLOAD, S_FEED_WARNING, do_feed_ok, nullptr);
                         }
                     }, (void *)(intptr_t)token);
     }
-    ui_make_btn(box, 16, 270, 160, 36, "Cancelar", COLOR_CARD, COLOR_MUTED,
+    ui_make_btn(box, 16, 270, 160, 36, S_COMMON_CANCEL, COLOR_CARD, COLOR_MUTED,
                 [](lv_event_t *){ ui_close_overlays(); }, nullptr);
 }
 
@@ -856,46 +901,60 @@ static void on_assign(lv_event_t *e) { pick_channel_then(true, false, e); }
 static void on_load(lv_event_t *e) { pick_channel_then(false, true, e); }
 static void on_unload(lv_event_t *e) { pick_channel_then(false, false, e); }
 
-static void do_delete_ok(void *) {
+/* Spec v1: UMA confirmação — resumo + digitar o número + "Excluir definitivamente"
+ * (habilitado só com o número certo). O rolo é relido e conferido antes de apagar. */
+static lv_obj_t *del_btn;
+static void do_delete_ok(lv_event_t *) {
     const WarehouseSpool *s = ficha_spool();
     if (!s) { ui_toast("Rolo não encontrado.", true); return; }
     const char *typed = ta_delete ? lv_textarea_get_text(ta_delete) : "";
     char expect[16];
     snprintf(expect, sizeof(expect), "%d", s->info.id);
-    if (strcmp(typed, expect) != 0) {
-        ui_toast("Digite o id do rolo para confirmar.", true);
-        return;
-    }
+    if (strcmp(typed, expect) != 0) { ui_toast(S_DELETE_WRONG_ID, true); return; }
     char idn[160];
     spool_identity(s, idn, sizeof(idn));
     inventory_request_delete(s->info.id, idn);
-    ui_toast("Excluindo...", false);
+    ui_close_overlays();
+    ui_toast(S_COMMON_SAVING, false);
+}
+
+static void delete_typed(lv_event_t *) {
+    const WarehouseSpool *s = ficha_spool();
+    if (!s || !del_btn || !ta_delete) return;
+    char expect[16];
+    snprintf(expect, sizeof(expect), "%d", s->info.id);
+    if (!strcmp(lv_textarea_get_text(ta_delete), expect)) lv_obj_clear_state(del_btn, LV_STATE_DISABLED);
+    else lv_obj_add_state(del_btn, LV_STATE_DISABLED);
 }
 
 static void open_delete(lv_event_t *) {
     const WarehouseSpool *s = ficha_spool();
     if (!s) return;
-    char idn[160], msg[280];
-    spool_identity(s, idn, sizeof(idn));
-    snprintf(msg, sizeof(msg), "Excluir %s?\nDigite o id %d para confirmar. Isso não pode ser desfeito.", idn, s->info.id);
-    lv_obj_t *box = ui_overlay_box("Excluir rolo", 600, 300);
+    char msg[400];
+    snprintf(msg, sizeof(msg), "#%d · %s %s · %s · %.0f g\n\n%s\n\n%s",
+             s->info.id, s->info.vendor, s->info.material, s->info.name,
+             s->info.remaining_g >= 0 ? s->info.remaining_g : 0.0f, S_DELETE_BODY, S_DELETE_HINT);
+    lv_obj_t *box = ui_overlay_box(S_DELETE_TITLE, 620, 320);
     lv_obj_t *h = lv_label_create(box);
     ui_style_label(h, &font_ui_14, COLOR_CREAM);
     lv_label_set_long_mode(h, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(h, 570);
+    lv_obj_set_width(h, 590);
     lv_obj_set_pos(h, 8, 40);
     lv_label_set_text(h, msg);
-    ta_delete = make_ta(box, 8, 140, 200, 36, "id", 8, true);
+    ta_delete = make_ta(box, 8, 186, 200, 36, "#", 8, true);
     lv_textarea_set_accepted_chars(ta_delete, "0123456789");
-    ui_make_btn(box, 8, 220, 180, 36, "Cancelar", COLOR_CARD, COLOR_MUTED,
+    lv_obj_add_event_cb(ta_delete, delete_typed, LV_EVENT_VALUE_CHANGED, nullptr);
+    ui_make_btn(box, 8, 250, 180, 40, S_COMMON_CANCEL, COLOR_CARD, COLOR_MUTED,
                 [](lv_event_t *){ ui_close_overlays(); }, nullptr);
-    ui_make_btn(box, 300, 220, 220, 36, "Excluir", COLOR_ALERT, 0x081725,
-                [](lv_event_t *){
-                    ui_confirm("Excluir",
-                               "Confirma a exclusão definitiva deste rolo no Spoolman?",
-                               do_delete_ok, nullptr);
-                }, nullptr);
+    del_btn = ui_make_btn(box, 330, 250, 270, 40, S_DELETE_BUTTON, COLOR_ALERT, COLOR_ON_ACCENT,
+                          do_delete_ok, nullptr);
+    lv_obj_add_event_cb(del_btn, [](lv_event_t *) { del_btn = nullptr; }, LV_EVENT_DELETE, nullptr);
+    lv_obj_add_state(del_btn, LV_STATE_DISABLED);
 }
+
+#ifdef U1_SIM
+void sim_delete_open(void) { open_delete(nullptr); }
+#endif
 
 void ui_ficha_open(int id) {
     if (!ui_inv) return;
@@ -915,44 +974,47 @@ void ui_ficha_open(int id) {
     lv_obj_clear_flag(sw, LV_OBJ_FLAG_SCROLLABLE);
 
     char line[200], idn[160];
-    spool_identity(s, idn, sizeof(idn));
+    snprintf(idn, sizeof(idn), "#%d · %s %s · %s", s->info.id, s->info.vendor, s->info.material, s->info.name);
     lv_obj_t *tt = lv_label_create(box);
     ui_style_label(tt, &font_ui_16, COLOR_TEXT);
     lv_obj_set_pos(tt, 52, 36);
     lv_label_set_text(tt, idn);
 
-    snprintf(line, sizeof(line), "Peso: %.0f / %.0f g   usado %.0f   %s%s  NFC: %s",
+    char line2[440];
+    snprintf(line2, sizeof(line2), "Peso: %.0f / %.0f g · usado %.0f g%s%s\nTags NFC: %s%s%s",
              s->info.remaining_g, s->initial_g, s->used_g,
-             s->archived ? "ARQUIVADO  " : "",
-             (s->info.id == ui_inv->active_id) ? "EM USO  " : "",
-             s->card_uids[0] ? s->card_uids : "--");
+             s->archived ? " · Arquivado" : "",
+             (s->info.id == ui_inv->active_id) ? " · Em uso" : "",
+             s->card_uids[0] ? s->card_uids : "—",
+             s->uids_invalid[0] ? "\nTag inválida no cadastro: " : "", s->uids_invalid);
     lv_obj_t *sub = lv_label_create(box);
     ui_style_label(sub, &font_ui_14, COLOR_MUTED);
     lv_label_set_long_mode(sub, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(sub, 670);
     lv_obj_set_pos(sub, 52, 60);
-    lv_label_set_text(sub, line);
+    lv_label_set_text(sub, line2);
+    (void)line;
 
     lv_obj_t *l1 = lv_label_create(box);
     ui_style_label(l1, &font_ui_14, COLOR_MUTED);
     lv_label_set_text(l1, "Local");
-    lv_obj_set_pos(l1, 8, 100);
-    ta_location = make_ta(box, 8, 118, 280, 34, "Local", 64, true);
+    lv_obj_set_pos(l1, 8, 124);
+    ta_location = make_ta(box, 8, 142, 280, 34, "Local", 64, true);
     lv_textarea_set_text(ta_location, s->location);
 
     lv_obj_t *l2 = lv_label_create(box);
     ui_style_label(l2, &font_ui_14, COLOR_MUTED);
     lv_label_set_text(l2, "Comentário");
-    lv_obj_set_pos(l2, 300, 100);
-    ta_comment = make_ta(box, 300, 118, 420, 34, "Comentário", 200, true);
+    lv_obj_set_pos(l2, 300, 124);
+    ta_comment = make_ta(box, 300, 142, 420, 34, "Comentário", 200, true);
     lv_textarea_set_text(ta_comment, s->comment);
 
     cb_weight = lv_checkbox_create(box);
     lv_checkbox_set_text(cb_weight, "Atualizar peso restante (g)");
     lv_obj_set_style_text_font(cb_weight, &font_ui_14, 0);
     lv_obj_set_style_text_color(cb_weight, ui_C(COLOR_CREAM), 0);
-    lv_obj_set_pos(cb_weight, 8, 162);
-    ta_weight = make_ta(box, 340, 156, 120, 34, "g", 8, true);
+    lv_obj_set_pos(cb_weight, 8, 192);
+    ta_weight = make_ta(box, 340, 186, 120, 34, "g", 8, true);
     if (s->info.remaining_g >= 0) {
         char g[16];
         snprintf(g, sizeof(g), "%.0f", (double)s->info.remaining_g);
@@ -960,12 +1022,12 @@ void ui_ficha_open(int id) {
     }
     /* desmarcado por padrao: nao sobrescreve o consumo ao vivo */
 
-    ui_make_btn(box, 8, 210, 180, 36, "Salvar", COLOR_MINT, 0x081725, ask_save_edit, nullptr);
-    ui_make_btn(box, 200, 210, 170, 36, "NFC", COLOR_CARD, COLOR_MINT, open_bind, nullptr);
-    ui_make_btn(box, 380, 210, 170, 36, "Ativar", COLOR_GOLD, 0x081725, on_assign, nullptr);
-    ui_make_btn(box, 560, 210, 170, 36, "Carregar", COLOR_CARD, COLOR_MINT, on_load, nullptr);
-    ui_make_btn(box, 380, 258, 170, 36, "Retirar", COLOR_CARD, COLOR_MINT, on_unload, nullptr);
-    ui_make_btn(box, 560, 258, 170, 36, "Excluir", COLOR_CARD, COLOR_ALERT, open_delete, nullptr);
+    ui_make_btn(box, 8, 236, 180, 36, "Salvar", COLOR_MINT, 0x081725, ask_save_edit, nullptr);
+    ui_make_btn(box, 200, 236, 170, 36, S_BIND_TITLE, COLOR_CARD, COLOR_MINT, open_bind, nullptr);
+    ui_make_btn(box, 380, 236, 170, 36, "Ativar", COLOR_GOLD, 0x081725, on_assign, nullptr);
+    ui_make_btn(box, 560, 236, 170, 36, "Carregar", COLOR_CARD, COLOR_MINT, on_load, nullptr);
+    ui_make_btn(box, 380, 284, 170, 36, "Retirar", COLOR_CARD, COLOR_MINT, on_unload, nullptr);
+    ui_make_btn(box, 560, 284, 170, 36, S_DELETE_TITLE, COLOR_CARD, COLOR_ALERT, open_delete, nullptr);
     ui_make_btn(box, 8, 370, 180, 36, "Voltar", COLOR_CARD, COLOR_MUTED,
                 [](lv_event_t *){ ui_close_overlays(); }, nullptr);
 }
@@ -974,7 +1036,7 @@ void ui_ficha_open(int id) {
 static void do_create_ok(void *) {
     CreateSpoolReq r;
     memset(&r, 0, sizeof(r));
-    ui_cpy(r.uid, sizeof(r.uid), ta_uid ? lv_textarea_get_text(ta_uid) : "");
+    ui_cpy(r.uid, sizeof(r.uid), new_spool_uid);
     ui_cpy(r.location, sizeof(r.location), ta_location ? lv_textarea_get_text(ta_location) : "");
     ui_cpy(r.comment, sizeof(r.comment), ta_comment ? lv_textarea_get_text(ta_comment) : "");
     r.initial_g = ta_init ? strtof(lv_textarea_get_text(ta_init), nullptr) : 1000;
@@ -1008,7 +1070,7 @@ static void do_create_ok(void *) {
             return;
         }
     }
-    new_spool_wait = true;
+    new_spool_wait = !r.uid[0]; /* sem tag: oferece associar logo depois */
     new_spool_seq = ui_act_seq;
     inventory_request_create(&r);
     ui_toast("Cadastrando rolo...", false);
@@ -1017,10 +1079,13 @@ static void do_create_ok(void *) {
 void ui_new_spool_open(void) {
     if (!inventory_busy()) inventory_request_catalog();
     lv_obj_t *box = ui_overlay_box("Novo rolo", 760, 440);
-    ta_uid = nullptr; /* a tag é associada depois de salvar (botao Associar tag) */
+    ta_uid = nullptr; /* tag opcional: lida antes (Cadastrar rolo) ou associada depois */
+    new_spool_uid[0] = 0;
     lv_obj_t *u = lv_label_create(box);
     ui_style_label(u, &font_ui_14, COLOR_MUTED);
-    lv_label_set_text(u, "A tag NFC e associada logo depois de salvar.");
+    lv_label_set_text(u, "Tag NFC (opcional): associada logo depois de salvar.");
+    new_uid_lbl = u;
+    lv_obj_add_event_cb(u, [](lv_event_t *) { new_uid_lbl = nullptr; }, LV_EVENT_DELETE, nullptr);
     lv_obj_set_pos(u, 8, 40);
 
     lv_obj_t *f = lv_label_create(box);
@@ -1081,9 +1146,7 @@ void ui_new_spool_open(void) {
                 [](lv_event_t *){ ui_close_overlays(); }, nullptr);
     ui_make_btn(box, 500, 370, 230, 36, "Salvar", COLOR_MINT, 0x081725,
                 [](lv_event_t *){
-                    ui_confirm("Novo rolo",
-                               "Salvar no Spoolman? Isso não movimenta a impressora.",
-                               do_create_ok, nullptr);
+                    ui_confirm(S_CREATE_TITLE, S_SAVE_CONFIRM, do_create_ok, nullptr);
                 }, nullptr);
 }
 

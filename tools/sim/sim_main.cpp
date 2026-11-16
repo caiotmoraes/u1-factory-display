@@ -14,6 +14,14 @@ void fake_set_thumb(const char *path);
 void fake_inventory_empty(void);
 extern int fake_quiet_req, fake_loud_req;
 const char *sim_fil_grams(int i);
+#include "nfc_hook.h"
+#include "strings_pt.h"
+extern NfcResult fake_nfc;
+extern bool fake_nfc_ready;
+extern ActionResult fake_act;
+extern uint32_t fake_act_seq;
+WarehouseSpool *fake_spool_mut(int id);
+void sim_delete_open(void);
 
 static lv_color_t fb[800 * 480];
 static lv_color_t draw_buf[800 * 480];
@@ -140,6 +148,55 @@ int main(int argc, char **argv) {
         bad |= fake_quiet_req - base != 1; /* não fica recarregando */
         fprintf(stderr, bad ? "REPRO: FALHOU\n" : "REPRO: ok\n");
         return bad;
+    }
+    if (getenv("V070")) {
+        /* v0.7.0 · U1 Spool Spec v1 */
+        snprintf(p, sizeof(p), "%s/v070_inicio.ppm", out); shot(p);
+        ui_go_control(nullptr); run(300);
+        snprintf(p, sizeof(p), "%s/v070_controle.ppm", out); shot(p);
+        ui_go_warehouse(nullptr); run(500);
+        snprintf(p, sizeof(p), "%s/v070_armazem.ppm", out); shot(p);
+        /* ficha com várias tags + um UID inválido legado no cadastro */
+        if (WarehouseSpool *w = fake_spool_mut(16)) {
+            spool_uids_parse("\"539E7FB4950001,530162B5140001,53DA61B5140001,ABC\"", w->card_uids,
+                             sizeof(w->card_uids), w->uids_invalid, sizeof(w->uids_invalid));
+        }
+        run(300);
+        ui_ficha_open(16); run(300);
+        snprintf(p, sizeof(p), "%s/v070_ficha.ppm", out); shot(p);
+        sim_delete_open(); run(300);
+        snprintf(p, sizeof(p), "%s/v070_excluir.ppm", out); shot(p);
+        ui_close_overlays();
+        ui_go_nfc(nullptr); run(300);
+        snprintf(p, sizeof(p), "%s/v070_nfc.ppm", out); shot(p);
+        /* Ler tag conhecida (impressora ociosa) → arma a inserção com contagem regressiva */
+        snprintf(fake_snap.print_stats, sizeof(fake_snap.print_stats), "standby");
+        fake_snap.state = PRINTER_IDLE; fake_snap.feeder.busy_print = false;
+        fake_snap.feeder.ch[3].filament_detected = false; fake_seq++; run(200);
+        ui_nfc_open(true); run(200);
+        memset(&fake_nfc, 0, sizeof(fake_nfc));
+        snprintf(fake_nfc.uid, sizeof(fake_nfc.uid), "533F95B4950001");
+        fake_nfc.ok = true; fake_nfc.ntag = true; fake_nfc_ready = true;
+        run(300);
+        fake_act.kind = ACT_NFC_AUTO; fake_act.state = AR_RUNNING;
+        snprintf(fake_act.message, sizeof(fake_act.message), "%s", S_NFC_INSERT_ONE);
+        fake_act_seq++;
+        run(12000);
+        snprintf(p, sizeof(p), "%s/v070_nfc_inserir.ppm", out); shot(p);
+        fake_act.state = AR_OK;
+        snprintf(fake_act.message, sizeof(fake_act.message), S_NFC_LINKED, 4, "#38 · SUNLU PETG · Coffee Brown");
+        fake_act_seq++; run(1200);
+        snprintf(p, sizeof(p), "%s/v070_nfc_associado.ppm", out); shot(p);
+        ui_close_overlays();
+        /* tag desconhecida */
+        ui_nfc_open(true); run(200);
+        snprintf(fake_nfc.uid, sizeof(fake_nfc.uid), "04A1B2C3D4E5F6");
+        fake_nfc_ready = true; run(400);
+        snprintf(p, sizeof(p), "%s/v070_nfc_desconhecida.ppm", out); shot(p);
+        ui_close_overlays();
+        ui_go_settings(nullptr); run(300);
+        snprintf(p, sizeof(p), "%s/v070_ajustes.ppm", out); shot(p);
+        return 0;
     }
     snprintf(p, sizeof(p), "%s/v060_inicio.ppm", out); shot(p);
 

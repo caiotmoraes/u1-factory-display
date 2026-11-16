@@ -1,4 +1,5 @@
 #include "control.h"
+#include "strings_pt.h"
 #include "ui_priv.h"
 #include <HTTPClient.h>
 #include <atomic>
@@ -58,8 +59,8 @@ void confirm(lv_event_t *event) {
     switch (op) {
     case ControlOp::Pause: case ControlOp::Resume: case ControlOp::Cancel:
         ui_cpy(selection, sizeof(selection), ui_snap.filename);
-        message = op == ControlOp::Pause ? "Pausar a impressão atual?" :
-                  op == ControlOp::Resume ? "Retomar a impressão atual?" : "Cancelar a impressão atual?";
+        message = op == ControlOp::Pause ? S_CTL_PAUSE_CONFIRM :
+                  op == ControlOp::Resume ? S_CTL_RESUME_CONFIRM : S_CTL_CANCEL_CONFIRM;
         break;
     case ControlOp::Home: message = "Confira se a área de movimento está livre. Referenciar XYZ?"; break;
     case ControlOp::Mesh: message = "Retire peças da mesa, limpe os bicos e confira a placa. Medir nova malha?"; break;
@@ -114,8 +115,8 @@ void build_page(Page selected) {
     memset(fan_labels, 0, sizeof(fan_labels));
     if (page == Job) {
         print_line = label(content, 4, 0, 690, "Impressão atual");
-        command(0, 30, 130, "Pausar", ControlOp::Pause);
-        command(140, 30, 130, "Retomar", ControlOp::Resume);
+        command(0, 30, 130, S_CTL_PAUSE, ControlOp::Pause);
+        command(140, 30, 130, S_CTL_RESUME, ControlOp::Resume);
         command(280, 30, 130, "Cancelar", ControlOp::Cancel);
         command(450, 30, 250, "Listar arquivos", ControlOp::Files, false);
         file_list = lv_list_create(content);
@@ -255,10 +256,9 @@ void control_ui_build() {
                     reinterpret_cast<void *>(static_cast<intptr_t>(i)));
         lv_obj_set_style_radius(tab_buttons[i], 20, 0);
     }
-    estop_button = ui_make_btn(root, 440, 0, 260, 40, "Parada de emergência", COLOR_RED, COLOR_ON_ACCENT,
+    estop_button = ui_make_btn(root, 440, 0, 260, 40, S_CTL_ESTOP, COLOR_RED, COLOR_ON_ACCENT,
                               [](lv_event_t *) {
-        ui_confirm("Parada de emergência",
-                   "Parar imediatamente a U1? Os motores e aquecedores serão desligados.",
+        ui_confirm(S_CTL_ESTOP, S_CTL_ESTOP_CONFIRM,
                    [](void *) {
                        if (!control_estop()) ui_toast("Não foi possível iniciar a parada remota.", true);
                    }, nullptr);
@@ -296,7 +296,7 @@ void control_ui_tick() {
                      ui_snap.bed_c, ui_snap.bed_target_c, heat_tool + 1, tool.nozzle_c, tool.nozzle_target_c);
             lv_label_set_text(heat_line, text);
         }
-        static const char *const fan_names[] = {"Peça", "Exaustão", "Circulador", "Cavidade"};
+        static const char *const fan_names[] = {S_FAN_PART, S_FAN_EXHAUST, S_FAN_CIRCULATION, S_FAN_CAVITY};
         const float speeds[] = {ui_snap.fan_part, ui_snap.fan_exhaust, ui_snap.fan_circulation, ui_snap.fan_cavity};
         for (int i = 0; i < 4 && fan_labels[i]; ++i) {
             if (speeds[i] < 0) lv_label_set_text_fmt(fan_labels[i], "%s: --", fan_names[i]);

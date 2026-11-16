@@ -15,7 +15,9 @@ extern "C" {
 
 #define SPOOL_LOCATION_LEN 65
 #define SPOOL_COMMENT_LEN  256
-#define SPOOL_UIDS_LEN     96
+#define SPOOL_UIDS_LEN     192 /* Spec v1: até 8 UIDs de 20 dígitos */
+#define SPOOL_UIDS_MAX     8
+#define SPOOL_UIDS_BAD_LEN 48
 #define SPOOL_COLORS_LEN   81
 
 typedef struct {
@@ -25,7 +27,8 @@ typedef struct {
     char location[SPOOL_LOCATION_LEN];
     char comment[SPOOL_COMMENT_LEN];
     char lot[24];
-    char card_uids[SPOOL_UIDS_LEN]; /* UIDs normalizados, separados por vírgula */
+    char card_uids[SPOOL_UIDS_LEN]; /* UIDs válidos normalizados "A,B" (+ tags[].uid) */
+    char uids_invalid[SPOOL_UIDS_BAD_LEN]; /* tokens inválidos do cadastro, crus */
     char multi_color[SPOOL_COLORS_LEN];
     bool archived;
     int filament_id;
@@ -45,9 +48,25 @@ int spool_normalize_uid(const char *raw, char *out, size_t n);
  * O bruto só pode ter [0-9a-fA-F: -]. Retorna true se ok. */
 bool spool_validate_uid(const char *raw, char *normalized, size_t n, char *err, size_t en);
 
-/* Extrai UIDs de extra.card_uids (string, JSON-string, array) + tags[].
- * Escreve em out separados por vírgula. */
+/* U1 Spool Spec v1 — leitura tolerante de extra.card_uids (texto JSON até 2 níveis,
+ * lista, texto "A,B" / "A B" / "A;B"). valid: "A,B" normalizados sem duplicatas;
+ * invalid (opcional): tokens inválidos crus. Retorna o número de UIDs válidos. */
+int spool_uids_parse(const char *raw, char *valid, size_t vn, char *invalid, size_t in);
+
+/* Compatibilidade: só os válidos. */
 void spool_parse_uids_from_extra(const char *card_uids_raw, char *out, size_t n);
+
+/* Pertença exata (nunca substring) de uid (qualquer formato) numa lista "A,B" normalizada. */
+bool spool_uid_listed(const char *list, const char *uid);
+
+/* Gravação canônica: une o valor atual (raw) com add. out = VALOR a gravar em
+ * extra.card_uids (texto JSON: "\"A,B\""), válidos primeiro, inválidos no fim.
+ * Retorna 1 = mudou, 0 = já estava, -1 = limite (SPOOL_UIDS_MAX), -2 = add inválido. */
+int spool_uids_canonical(const char *raw, const char *add, char *out, size_t n);
+
+/* filament_detect.info[ch].CARD_UID serializado em JSON: lista de 0–255 ou string de
+ * decimais ("83 245 …"). 4/7/10 bytes, todo zero = sem tag. out: hex maiúsculo (n >= 21). */
+bool spool_card_uid_hex(const char *json_value, char *out, size_t n);
 
 /* Identidade usada na exclusão: "#id · vendor material · name|filament_id" */
 void spool_identity(const WarehouseSpool *s, char *out, size_t n);

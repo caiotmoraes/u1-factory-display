@@ -2,6 +2,7 @@
  * de progresso, filamentos, temperaturas e ventiladores. Tudo aqui roda na
  * task do LVGL; dados chegam por cópias (moonraker_copy / inventory_copy). */
 #include "ui_priv.h"
+#include "strings_pt.h"
 #include "psram_json.h"
 #include "control.h"
 #include "thumb.h"
@@ -901,7 +902,7 @@ static void settings_refresh(void) {
              state_text(s->state, s->cancelled),
              s->moonraker_ok ? "conectado" : s->discovering ? "procurando…" : "sem conexão");
     lv_label_set_text(set_u1, t);
-    snprintf(t, sizeof(t), "U1 Factory Display v0.6.1\nRAM interna livre: %u KB\nPSRAM livre: %u KB",
+    snprintf(t, sizeof(t), "U1 Factory Display v0.7.0 · U1 Spool Spec v1\nRAM interna livre: %u KB\nPSRAM livre: %u KB",
              (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
              (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
     lv_label_set_text(set_about, t);
@@ -932,6 +933,17 @@ static void build_settings(void) {
 }
 
 /* ---------- NFC ---------- */
+static lv_obj_t *nfc_deadline_btn[5];
+static void nfc_deadline_refresh(void) {
+    static const int choices[] = {60, 120, 180, 300, 600};
+    const int cur = inventory_insert_deadline();
+    for (int i = 0; i < 5; i++) {
+        if (!nfc_deadline_btn[i]) continue;
+        const bool on = choices[i] == cur;
+        lv_obj_set_style_bg_color(nfc_deadline_btn[i], ui_C(on ? COLOR_ACCENT_BG : COLOR_SURFACE), 0);
+        lv_obj_set_style_border_color(nfc_deadline_btn[i], ui_C(on ? COLOR_ACCENT : COLOR_LINE), 0);
+    }
+}
 static void nfc_screen_refresh(void) {
     if (!nfc_reader) return;
     const char *t = nfc_present() ? "Leitor PN532 conectado." : "Aguardando o leitor PN532 (UART).";
@@ -954,16 +966,29 @@ static void build_nfc(void) {
     ui_make_btn(k, 352, 150, 324, 48, "Associar tag a um rolo", COLOR_SURFACE, COLOR_ACCENT,
                 [](lv_event_t *) { ui_nfc_open(false); }, nullptr);
 
+    /* Spec v1: prazo para inserir após a leitura (60–600 s, padrão 180), igual ao app. */
     lv_obj_t *k2 = ui_make_card(c, 0, 288, CONTENT_W, 168);
     ui_label(k2, 24, 20, &font_icon_18, COLOR_ACCENT, ICON_CUBE);
-    ui_label(k2, 56, 18, &font_ui_20, COLOR_TEXT, "Dica");
+    ui_label(k2, 56, 18, &font_ui_20, COLOR_TEXT, S_NFC_DEADLINE);
     lv_obj_t *t = ui_label(k2, 24, 54, &font_ui_14, COLOR_TEXT2,
-        "No Armazém, abra a ficha de um rolo e toque NFC para associar a tag direto a ele. "
-        "Gravar NDEF e inserir no alimentador ficam em Avançado, dentro do leitor.");
+        "Ao ler uma tag cadastrada, a tela espera você inserir o filamento em um alimentador livre. "
+        "Na ficha do rolo, Associar tag grava a tag no Spoolman.");
     lv_label_set_long_mode(t, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(t, CONTENT_W - 48);
     lv_obj_set_style_text_line_space(t, 4, 0);
-    ui_make_btn(k2, 24, 110, 220, 42, "Abrir o Armazém", COLOR_SURFACE, COLOR_ACCENT, ui_go_warehouse, nullptr);
+    static const int choices[] = {60, 120, 180, 300, 600};
+    for (int i = 0; i < 5; i++) {
+        char lab[16];
+        snprintf(lab, sizeof(lab), S_NFC_MINUTES, choices[i] / 60);
+        lv_obj_t *b = ui_make_btn(k2, 24 + i * 92, 110, 84, 42, lab, COLOR_SURFACE, COLOR_ACCENT,
+                                  [](lv_event_t *e) {
+                                      inventory_set_insert_deadline((int)(intptr_t)lv_event_get_user_data(e));
+                                      nfc_deadline_refresh();
+                                  }, (void *)(intptr_t)choices[i]);
+        nfc_deadline_btn[i] = b;
+    }
+    nfc_deadline_refresh();
+    ui_make_btn(k2, 496, 110, 180, 42, "Abrir o Armazém", COLOR_SURFACE, COLOR_ACCENT, ui_go_warehouse, nullptr);
 }
 
 void ui_init(void) {

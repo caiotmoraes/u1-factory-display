@@ -21,6 +21,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include "strings_pt.h"
+#include <Preferences.h>
+
 static SemaphoreHandle_t mutex;
 static TaskHandle_t task_h;
 static InventorySnapshot *g_inv;
@@ -42,6 +45,9 @@ static char p_uid[24];
 static std::atomic<bool> nfc_auto_cancelled{false};
 static int nfc_auto_id;
 static char nfc_auto_uid[24];
+static bool nfc_auto_m1;                 /* CARD_TYPE: Mifare Classic (M1) ou NTAG */
+static int insert_deadline_s = 180;      /* Spec v1: 60–600 s, padrão 180 (Ajustes > NFC) */
+static Preferences spool_prefs;
 static ControlOp control_op;
 static int control_value;
 static char control_path[192];
@@ -128,7 +134,7 @@ static int http_do(const char *url, const char *method, const char *payload,
     if (!WiFi.isConnected()) return HTTPC_ERROR_CONNECTION_REFUSED;
     HTTPClient http;
     int t = timeout_ms > 0 ? timeout_ms : 8000;
-    if (t > 60000) t = 60000;
+    if (t > 60000) t = 60000; /* HTTPClient::setTimeout é uint16_t; operações longas confirmam por polling */
     http.setConnectTimeout(t > 3000 ? 3000 : t);
     http.setTimeout(t);
     http.setReuse(false);
@@ -328,7 +334,7 @@ static bool parse_feeder_fresh(FeederInfo *f, char *err, size_t errn, const char
         return false;
     JsonDocument doc(psram_json());
     if (deserializeJson(doc, http_buf, len)) {
-        cpy(err, errn, "Resposta inválida dos feeders");
+        cpy(err, errn, "Resposta inválida dos alimentadores.");
         return false;
     }
     JsonObject root = doc["result"].is<JsonObject>() ? doc["result"].as<JsonObject>() : doc.as<JsonObject>();
@@ -378,17 +384,14 @@ static bool parse_feeder_fresh(FeederInfo *f, char *err, size_t errn, const char
     f->valid = got > 0;
     if (uid) {
         uid[0] = 0;
-        JsonArray bytes = st["filament_detect"]["info"][uid_channel]["CARD_UID"].as<JsonArray>();
-        const size_t count = bytes.size();
-        if (count == 4 || count == 7 || count == 10) {
-            for (size_t i = 0; i < count; ++i) {
-                if (!bytes[i].is<uint8_t>()) { uid[0] = 0; break; }
-                snprintf(uid + i * 2, 3, "%02X", static_cast<unsigned>(bytes[i].as<uint8_t>()));
-            }
-        }
+        /* Spec v1: CARD_UID pode vir como lista [83,245,…] ou texto "83 245 …". */
+        char cu[128] = {0};
+        serializeJson(st["filament_detect"]["info"][uid_channel]["CARD_UID"], cu, sizeof(cu));
+        char hex[24] = {0};
+        if (spool_card_uid_hex(cu, hex, sizeof(hex))) cpy(uid, 21, hex);
     }
     if (!f->printer_ready) {
-        cpy(err, errn, "A impressora não está pronta");
+        cpy(err, errn, S_CONN_NOT_READY);
         return false;
     }
     return true;
@@ -399,25 +402,25 @@ static const char *ok_phases[] = {
 };
 
 static bool idle_for_manual(const FeederInfo *f, char *err, size_t errn, bool allow_print) {
-    if (!f || !f->valid) { cpy(err, errn, "Status dos feeders indisponível"); return false; }
+    if (!f || !f->valid) { cpy(err, errn, S_CONN_NOT_READY); return false; }
     /* allow_print: associar rolo é só metadado (spoollink), pode ocorrer durante a impressão.
      * Carga/descarga física continua bloqueada. */
-    if (f->busy_print && !allow_print) { cpy(err, errn, "Troca manual indisponível durante impressão ou pausa."); return false; }
-    if (f->busy_motion && !allow_print) { cpy(err, errn, "Aguarde o movimento atual da U1 terminar."); return false; }
+    if (f->busy_print && !allow_print) { cpy(err, errn, S_FEEDER_PRINT_BLOCKED); return false; }
+    if (f->busy_motion && !allow_print) { cpy(err, errn, S_FEEDER_MOTION); return false; }
     for (int i = 0; i < 4; i++) {
         if (!f->ch[i].module_exist) {
-            snprintf(err, errn, "Feeder %d indisponível", i + 1);
+            snprintf(err, errn, S_FEEDER_UNAVAILABLE, i + 1);
             return false;
         }
         if (f->ch[i].channel_error[0] && strcasecmp(f->ch[i].channel_error, "ok") != 0) {
-            snprintf(err, errn, "Resolva o erro do feeder %d na U1 antes da troca.", i + 1);
+            snprintf(err, errn, S_FEEDER_ERROR, i + 1);
             return false;
         }
         const char *ph = f->ch[i].channel_state;
         bool okp = (ph[0] == 0);
         for (int k = 0; ok_phases[k]; k++) if (strcmp(ph, ok_phases[k]) == 0) okp = true;
         if (!okp) {
-            snprintf(err, errn, "Aguarde a operação atual do feeder %d terminar.", i + 1);
+            snprintf(err, errn, S_FEEDER_BUSY, i + 1);
             return false;
         }
     }
@@ -427,11 +430,11 @@ static bool idle_for_manual(const FeederInfo *f, char *err, size_t errn, bool al
 static bool require_external(const char *ip, uint16_t port, char *err, size_t errn) {
     int m = read_external_mode(ip, port);
     if (m == 0) {
-        cpy(err, errn, "Não foi possível verificar Filament Detection. Confirme o modo External no Firmware Config.");
+        cpy(err, errn, S_CONN_EXTERNAL_UNKNOWN);
         return false;
     }
     if (m != 1) {
-        cpy(err, errn, "Selecione Filament Detection = External no Firmware Config antes de associar ou carregar rolos. Leitores internos podem apagar os dados.");
+        cpy(err, errn, S_CONN_EXTERNAL_REQUIRED);
         return false;
     }
     return true;
@@ -614,46 +617,31 @@ static void do_inspect(const char *uid) {
     g_act.inspect_uid[0] = 0;
     cpy(g_act.inspect_uid, sizeof(g_act.inspect_uid), norm);
     for (int i = 0; i < g_inv->count && g_act.n_matches < 8; i++) {
-        const char *u = g_inv->items[i].card_uids;
-        if (!u[0]) continue;
-        /* uids separados por virgula */
-        const char *p = u;
-        while (*p) {
-            char tok[24] = {0};
-            int k = 0;
-            while (*p && *p != ',' && k < 23) tok[k++] = *p++;
-            tok[k] = 0;
-            if (*p == ',') p++;
-            char tn[24] = {0};
-            spool_normalize_uid(tok, tn, sizeof(tn));
-            if (strcmp(tn, norm) == 0) {
-                g_act.matches[g_act.n_matches++] = g_inv->items[i];
-                break;
-            }
-        }
+        if (spool_uid_listed(g_inv->items[i].card_uids, norm))
+            g_act.matches[g_act.n_matches++] = g_inv->items[i];
     }
     int nm = g_act.n_matches;
     WarehouseSpool first = (nm > 0) ? g_act.matches[0] : WarehouseSpool{};
     xSemaphoreGive(mutex);
     if (nm == 0) {
         char m[120];
-        snprintf(m, sizeof(m), "Tag não cadastrada no Spoolman: %s. Use Novo rolo no Armazém.", norm);
+        snprintf(m, sizeof(m), S_NFC_UNKNOWN, norm);
         act_set(AR_ERR, m);
         return;
     }
     if (nm > 1) {
-        act_set(AR_ERR, "UID duplicado no Spoolman. Corrija os cadastros antes de associar.");
+        act_set(AR_ERR, S_UID_DUPLICATE);
         return;
     }
     if (first.archived) {
         char m[140], idn[96];
         spool_identity(&first, idn, sizeof(idn));
-        snprintf(m, sizeof(m), "Tag já cadastrada: %s. Este rolo está arquivado.", idn);
+        snprintf(m, sizeof(m), S_NFC_ARCHIVED, idn);
         act_set(AR_ERR, m);
         return;
     }
     char m[80];
-    snprintf(m, sizeof(m), "Rolo #%d identificado", first.info.id);
+    snprintf(m, sizeof(m), S_NFC_IDENTIFIED, first.info.id);
     xSemaphoreTake(mutex, portMAX_DELAY);
     g_act.saved = first;
     g_act.spool_id = first.info.id;
@@ -661,21 +649,8 @@ static void do_inspect(const char *uid) {
     act_set(AR_OK, m, first.info.id);
 }
 
-/* UID normalizado presente numa lista "A,B" (já normalizada pelo parser). */
-static bool uid_listed(const char *list, const char *norm) {
-    const char *p = list;
-    while (p && *p) {
-        char tok[24] = {0};
-        int k = 0;
-        while (*p && *p != ',' && k < 23) tok[k++] = *p++;
-        while (*p && *p != ',') p++;
-        if (*p == ',') p++;
-        char tn[24] = {0};
-        spool_normalize_uid(tok, tn, sizeof(tn));
-        if (tn[0] && !strcmp(tn, norm)) return true;
-    }
-    return false;
-}
+/* Spec v1: pertença exata ao conjunto (nunca substring). */
+static bool uid_listed(const char *list, const char *norm) { return spool_uid_listed(list, norm); }
 
 static bool unique_uid(const char *norm, int self, char *err, size_t errn) {
     if (g_inv->status != INV_OK) {
@@ -695,20 +670,10 @@ static bool unique_uid(const char *norm, int self, char *err, size_t errn) {
     xSemaphoreGive(mutex);
     for (int i = 0; i < n; i++) {
         if (rows[i].id == self) continue;
-        const char *p = rows[i].uids;
-        while (*p) {
-            char tok[24] = {0};
-            int k = 0;
-            while (*p && *p != ',' && k < 23) tok[k++] = *p++;
-            if (*p == ',') p++;
-            char tn[24] = {0};
-            spool_normalize_uid(tok, tn, sizeof(tn));
-            if (strcmp(tn, norm) == 0) {
-                snprintf(err, errn, "Tag já vinculada ao rolo #%d%s. Nenhuma tag foi transferida.",
-                         rows[i].id, rows[i].archived ? " (arquivado)" : "");
-                free(rows);
-                return false;
-            }
+        if (uid_listed(rows[i].uids, norm)) {
+            snprintf(err, errn, rows[i].archived ? S_UID_TAKEN_ARCHIVED : S_UID_TAKEN, rows[i].id);
+            free(rows);
+            return false;
         }
     }
     free(rows);
@@ -729,7 +694,7 @@ static bool tag_field(const char *ip, uint16_t port, char *err, size_t errn) {
             if (strcmp(key, "card_uids") == 0) {
                 const char *ft = f["field_type"] | "";
                 if (strcmp(ft, "text") != 0) {
-                    cpy(err, errn, "O campo card_uids precisa ser do tipo texto no Spoolman.");
+                    cpy(err, errn, S_UID_FIELD_TYPE);
                     return false;
                 }
                 return true;
@@ -776,7 +741,7 @@ static void do_update(int id, const char *location, const char *comment, bool se
     g_act.spool_id = id;
     xSemaphoreGive(mutex);
     char h[120];
-    snprintf(h, sizeof(h), "Rolo #%d atualizado no Spoolman", id);
+    snprintf(h, sizeof(h), S_UPDATE_DONE, id);
     history_add(h);
     act_set(AR_OK, h, id);
     do_refresh();
@@ -803,9 +768,9 @@ static void do_bind(int id, const char *uid) {
     if (!spool_parse_one(http_buf, (size_t)len, &cur, id, err, sizeof(err))) {
         act_set(AR_ERR, err[0] ? err : "Rolo inválido"); return;
     }
-    if (cur.archived) { act_set(AR_ERR, "Desarquive o rolo antes de vincular NFC."); return; }
+    if (cur.archived) { act_set(AR_ERR, S_BIND_ARCHIVED); return; }
 
-    /* preserva extra e une UIDs */
+    /* preserva os outros campos de extra */
     JsonDocument src(psram_json());
     if (deserializeJson(src, http_buf, len)) { act_set(AR_ERR, "JSON do rolo inválido"); return; }
     JsonObject obj = src.as<JsonObject>();
@@ -814,50 +779,25 @@ static void do_bind(int id, const char *uid) {
         if (r["response"].is<JsonObject>()) obj = r["response"].as<JsonObject>();
     } else if (src["response"].is<JsonObject>()) obj = src["response"].as<JsonObject>();
 
-    if (uid_listed(cur.card_uids, norm)) {
+    /* Spec v1: grava sempre o formato canônico "\"A,B\"" (migra listas e textos
+     * legados; inválidos vão para o fim; tags[].uid não é copiado). */
+    char raw[SPOOL_UIDS_LEN * 2] = {0};
+    JsonVariant cu = obj["extra"]["card_uids"];
+    if (cu.is<const char *>()) cpy(raw, sizeof(raw), cu.as<const char *>());
+    else if (cu.is<JsonArray>()) serializeJson(cu, raw, sizeof(raw));
+    char quoted[SPOOL_UIDS_LEN * 2 + 8] = {0};
+    const int rc = spool_uids_canonical(raw, norm, quoted, sizeof(quoted));
+    if (rc == -1) {
+        char m[80];
+        snprintf(m, sizeof(m), S_UID_TOO_MANY, SPOOL_UIDS_MAX);
+        act_set(AR_ERR, m); return;
+    }
+    if (rc < 0) { act_set(AR_ERR, S_UID_INVALID); return; }
+    if (rc == 0 && cu.is<const char *>() && !strcmp(raw, quoted)) {
         char h[120];
-        snprintf(h, sizeof(h), "Tag %s já estava associada ao rolo #%d.", norm, id);
+        snprintf(h, sizeof(h), S_BIND_ALREADY, norm, id);
         act_set(AR_OK, h, id);
         return;
-    }
-    /* Mantém o formato que o rolo já usa em extra.card_uids:
-     *  - lista JSON  -> "[\"A\",\"B\"]" (acrescenta o novo item)
-     *  - texto       -> "\"A,B\""        (formato do Spool Factory/SpoolLink)
-     * O valor no Spoolman é sempre texto JSON. */
-    const char *raw = obj["extra"]["card_uids"] | "";
-    char quoted[SPOOL_UIDS_LEN + 64] = {0};
-    {
-        JsonDocument old(psram_json());
-        const bool parsed = raw[0] && !deserializeJson(old, raw);
-        if (parsed && old.is<JsonArray>()) {
-            old.as<JsonArray>().add(norm);
-            if (measureJson(old) >= sizeof(quoted)) { act_set(AR_ERR, "Muitas tags neste rolo."); return; }
-            serializeJson(old, quoted, sizeof(quoted));
-        } else if (parsed && old.is<const char *>() && old.as<const char *>()[0] == '[') {
-            /* texto JSON contendo uma lista: "\"[\\\"A\\\"]\"" */
-            JsonDocument inner(psram_json());
-            if (deserializeJson(inner, old.as<const char *>()) || !inner.is<JsonArray>()) {
-                act_set(AR_ERR, "card_uids do rolo em formato desconhecido."); return;
-            }
-            inner.as<JsonArray>().add(norm);
-            char list[SPOOL_UIDS_LEN + 48] = {0};
-            if (measureJson(inner) >= sizeof(list)) { act_set(AR_ERR, "Muitas tags neste rolo."); return; }
-            serializeJson(inner, list, sizeof(list));
-            JsonDocument q(psram_json());
-            q.set(list);
-            if (measureJson(q) >= sizeof(quoted)) { act_set(AR_ERR, "Muitas tags neste rolo."); return; }
-            serializeJson(q, quoted, sizeof(quoted));
-        } else {
-            char joined[SPOOL_UIDS_LEN + 24] = {0};
-            const char *prev = parsed && old.is<const char *>() ? old.as<const char *>() :
-                               parsed ? "" : raw; /* texto cru legado */
-            if (prev[0]) snprintf(joined, sizeof(joined), "%s,%s", prev, norm);
-            else cpy(joined, sizeof(joined), norm);
-            JsonDocument q(psram_json());
-            q.set(joined);
-            if (measureJson(q) >= sizeof(quoted)) { act_set(AR_ERR, "Muitas tags neste rolo."); return; }
-            serializeJson(q, quoted, sizeof(quoted));
-        }
     }
 
     JsonDocument patch(psram_json());
@@ -879,7 +819,7 @@ static void do_bind(int id, const char *uid) {
     WarehouseSpool saved{};
     spool_parse_one(http_buf, (size_t)len, &saved, id, err, sizeof(err));
     if (!uid_listed(saved.card_uids, norm)) {
-        act_set(AR_ERR, "Vínculo recebido sem NFC confirmado. Atualize o estoque.");
+        act_set(AR_ERR, S_BIND_NOT_CONFIRMED);
         return;
     }
     xSemaphoreTake(mutex, portMAX_DELAY);
@@ -887,7 +827,7 @@ static void do_bind(int id, const char *uid) {
     g_act.spool_id = id;
     xSemaphoreGive(mutex);
     char h[140];
-    snprintf(h, sizeof(h), "NFC %s associado ao rolo #%d", norm, id);
+    snprintf(h, sizeof(h), S_BIND_DONE, norm, id);
     history_add(h);
     act_set(AR_OK, h, id);
     do_refresh();
@@ -1008,7 +948,7 @@ static void do_create(const CreateSpoolReq *r) {
         act_set(AR_ERR, err); return;
     }
     if (r->remaining_g > r->initial_g + 0.01f) {
-        act_set(AR_ERR, "Peso restante não pode ser maior que o inicial."); return;
+        act_set(AR_ERR, S_CREATE_WEIGHT); return;
     }
     if (r->initial_g < 0.01f) { act_set(AR_ERR, "Peso inicial inválido."); return; }
     if (!endpoint(ip, &port)) { act_set(AR_ERR, "U1 não encontrada"); return; }
@@ -1060,8 +1000,10 @@ static void do_create(const CreateSpoolReq *r) {
 
     if (with_uid && !unique_uid(norm, 0, err, sizeof(err))) { act_set(AR_ERR, err); return; }
 
-    char quoted[32];
-    snprintf(quoted, sizeof(quoted), "\"%s\"", norm);
+    char quoted[48] = {0};
+    if (with_uid && spool_uids_canonical("", norm, quoted, sizeof(quoted)) < 0) {
+        act_set(AR_ERR, S_UID_INVALID); return;
+    }
     JsonDocument body(psram_json());
     body["filament_id"] = fid;
     body["initial_weight"] = r->initial_g;
@@ -1082,8 +1024,8 @@ static void do_create(const CreateSpoolReq *r) {
         act_set(AR_ERR, err[0] ? err : "Cadastro sem resposta válida");
         return;
     }
-    if (with_uid && !strstr(saved.card_uids, norm)) {
-        act_set(AR_ERR, "Cadastro recebido sem NFC confirmado. Atualize o estoque antes de repetir.");
+    if (with_uid && !uid_listed(saved.card_uids, norm)) { /* F1: pertença exata */
+        act_set(AR_ERR, S_CREATE_NOT_CONFIRMED);
         return;
     }
     xSemaphoreTake(mutex, portMAX_DELAY);
@@ -1091,8 +1033,8 @@ static void do_create(const CreateSpoolReq *r) {
     g_act.spool_id = saved.info.id;
     xSemaphoreGive(mutex);
     char h[140];
-    if (with_uid) snprintf(h, sizeof(h), "Rolo #%d cadastrado (NFC %s)", saved.info.id, norm);
-    else snprintf(h, sizeof(h), "Rolo #%d cadastrado. Associe a tag NFC.", saved.info.id);
+    if (with_uid) snprintf(h, sizeof(h), S_CREATE_DONE_TAG, saved.info.id, norm);
+    else snprintf(h, sizeof(h), S_CREATE_DONE, saved.info.id);
     history_add(h);
     act_set(AR_OK, h, saved.info.id);
     do_refresh();
@@ -1109,38 +1051,38 @@ static void do_delete(int id, const char *identity) {
     if (parse_feeder_fresh(&f, fe, sizeof(fe), ip, port) && f.valid) {
         for (int i = 0; i < 4; i++) {
             if (f.ch[i].spool_id == id) {
-                snprintf(err, sizeof(err), "Rolo #%d está no feeder %d. Remova antes de excluir.", id, i + 1);
+                snprintf(err, sizeof(err), S_DELETE_INSTALLED, id, i + 1);
                 act_set(AR_ERR, err);
                 return;
             }
         }
     }
-    /* confere identidade */
-    const WarehouseSpool *found = nullptr;
-    WarehouseSpool copy{};
-    xSemaphoreTake(mutex, portMAX_DELAY);
-    for (int i = 0; i < g_inv->count; i++) {
-        if (g_inv->items[i].info.id == id) { copy = g_inv->items[i]; found = &copy; break; }
-    }
-    xSemaphoreGive(mutex);
-    if (found) {
-        char idn[160];
-        spool_identity(found, idn, sizeof(idn));
-        if (identity && identity[0] && strcmp(identity, idn) != 0) {
-            act_set(AR_ERR, "Identidade não confere. Atualize o estoque e tente de novo.");
-            return;
-        }
-    }
+    /* Spec v1: relê o rolo no Spoolman e confere a identidade antes de apagar. */
     char path[40];
     snprintf(path, sizeof(path), "/v1/spool/%d", id);
     int len = 0;
+    WarehouseSpool *fresh = (WarehouseSpool *)psram_z(sizeof(WarehouseSpool));
+    if (!fresh) { act_set(AR_ERR, "Sem memória"); return; }
+    if (!proxy(ip, port, "GET", path, nullptr, 6000, &len, err, sizeof(err)) ||
+        !spool_parse_one(http_buf, (size_t)len, fresh, id, err, sizeof(err))) {
+        free(fresh);
+        act_set(AR_ERR, err[0] ? err : S_DELETE_CHANGED); return;
+    }
+    char idn[160];
+    spool_identity(fresh, idn, sizeof(idn));
+    free(fresh);
+    if (!identity || !identity[0] || strcmp(identity, idn) != 0) {
+        act_set(AR_ERR, S_DELETE_CHANGED);
+        return;
+    }
+    len = 0;
     if (!proxy(ip, port, "DELETE", path, nullptr, 8000, &len, err, sizeof(err))) {
         act_set(AR_ERR, err);
         history_add(err);
         return;
     }
     char h[80];
-    snprintf(h, sizeof(h), "Rolo #%d excluído do Spoolman", id);
+    snprintf(h, sizeof(h), S_DELETE_DONE, id);
     history_add(h);
     act_set(AR_OK, h, id);
     do_refresh();
@@ -1160,19 +1102,19 @@ static void do_assign(int ch, int spool_id) {
     char ip[16] = {0};
     uint16_t port = 7125;
     char err[200] = {0};
-    if (ch < 0 || ch > 3) { act_set(AR_ERR, "Feeder inválido."); return; }
-    if (!endpoint(ip, &port)) { act_set(AR_ERR, "U1 não encontrada"); return; }
+    if (ch < 0 || ch > 3) { act_set(AR_ERR, S_FEEDER_INVALID); return; }
+    if (!endpoint(ip, &port)) { act_set(AR_ERR, S_CONN_U1_NOT_FOUND); return; }
     if (!require_external(ip, port, err, sizeof(err))) { act_set(AR_ERR, err); return; }
     FeederInfo f{};
     if (!parse_feeder_fresh(&f, err, sizeof(err), ip, port)) { act_set(AR_ERR, err); return; }
     if (!idle_for_manual(&f, err, sizeof(err), true)) { act_set(AR_ERR, err); return; }
     if (!f.ch[ch].filament_detected) {
-        snprintf(err, sizeof(err), "Insira o filamento no feeder %d antes de associar o rolo.", ch + 1);
+        snprintf(err, sizeof(err), S_ASSIGN_INSERT_FIRST, ch + 1);
         act_set(AR_ERR, err); return;
     }
     for (int i = 0; i < 4; i++) {
         if (i != ch && f.ch[i].filament_detected && f.ch[i].spool_id == spool_id) {
-            snprintf(err, sizeof(err), "Este rolo já está associado ao feeder %d.", i + 1);
+            snprintf(err, sizeof(err), S_ASSIGN_IN_OTHER, i + 1);
             act_set(AR_ERR, err); return;
         }
     }
@@ -1190,7 +1132,7 @@ static void do_assign(int ch, int spool_id) {
     }
     char info[480], ie[80];
     if (!spool_build_link_info(&s, info, sizeof(info), ie, sizeof(ie))) {
-        act_set(AR_ERR, ie[0] ? ie : "Rolo sem material ou cor.");
+        act_set(AR_ERR, ie[0] ? ie : S_ASSIGN_NO_MATERIAL);
         return;
     }
     JsonDocument body(psram_json());
@@ -1206,26 +1148,16 @@ static void do_assign(int ch, int spool_id) {
         return;
     }
     char h[140];
-    snprintf(h, sizeof(h), "Rolo #%d associado ao feeder %d", spool_id, ch + 1);
+    snprintf(h, sizeof(h), S_ASSIGN_DONE, spool_id, ch + 1);
     history_add(h);
     act_set(AR_OK, h, spool_id);
 }
 
-static bool uid_list_contains(const char *list, const char *uid) {
-    while (*list) {
-        char normalized[21]{};
-        size_t n = 0;
-        while (*list && *list != ',' && *list != ';') {
-            const unsigned char c = *list++;
-            if (isxdigit(c)) {
-                if (n < sizeof(normalized) - 1) normalized[n] = toupper(c);
-                ++n;
-            }
-        }
-        if (n < sizeof(normalized) && !strcmp(normalized, uid)) return true;
-        if (*list) ++list;
-    }
-    return false;
+/* Spec v1: mesma leitura tolerante do parser (lista, texto, texto com lista). */
+static bool uid_list_contains(const char *raw, const char *uid) {
+    char valid[SPOOL_UIDS_LEN] = {0};
+    spool_uids_parse(raw, valid, sizeof(valid), nullptr, 0);
+    return spool_uid_listed(valid, uid);
 }
 
 static bool nfc_spool_matches(const char *ip, uint16_t port, const char *uid, int id,
@@ -1263,7 +1195,7 @@ static bool nfc_spool_matches(const char *ip, uint16_t port, const char *uid, in
         active_match = (row["id"] | 0) == id && !(row["archived"] | false);
     }
     if (matches == 1 && active_match) return true;
-    cpy(err, errn, "UID sem vínculo único com este rolo ativo no Spoolman.");
+    cpy(err, errn, matches > 1 ? S_UID_DUPLICATE : S_NFC_STATE_CHANGED);
     return false;
 }
 
@@ -1283,32 +1215,35 @@ static void do_nfc_auto(int id, const char *request_uid) {
     cpy(uid, sizeof(uid), request_uid);
     uint16_t port = 7125;
     FeederInfo f{};
-    if (!endpoint(ip, &port)) { act_set(AR_ERR, "U1 não encontrada."); return; }
+    if (!endpoint(ip, &port)) { act_set(AR_ERR, S_CONN_U1_NOT_FOUND); return; }
     if (!require_external(ip, port, err, sizeof(err)) ||
         !nfc_spool_matches(ip, port, uid, id, err, sizeof(err)) ||
-        !parse_feeder_fresh(&f, err, sizeof(err), ip, port) ||
-        !idle_for_manual(&f, err, sizeof(err), false)) { act_set(AR_ERR, err); return; }
+        !parse_feeder_fresh(&f, err, sizeof(err), ip, port)) { act_set(AR_ERR, err); return; }
+    if (f.busy_print) { act_set(AR_ERR, S_NFC_PRINTING); return; }
+    if (!idle_for_manual(&f, err, sizeof(err), false)) { act_set(AR_ERR, err); return; }
     const unsigned baseline = feeder_presence(f);
     for (int i = 0; i < 4; ++i) {
         if (f.ch[i].filament_detected && f.ch[i].spool_id == id) {
-            act_set(AR_ERR, "Este rolo já está em um alimentador."); return;
+            char m[80]; snprintf(m, sizeof(m), S_NFC_ALREADY_IN, i + 1);
+            act_set(AR_ERR, m); return;
         }
     }
-    if (baseline == 15) { act_set(AR_ERR, "Retire o filamento de um alimentador primeiro."); return; }
-    act_set(AR_RUNNING, "Insira o filamento em apenas um alimentador livre.");
+    if (baseline == 15) { act_set(AR_ERR, S_NFC_ALL_FULL); return; }
+    act_set(AR_RUNNING, S_NFC_INSERT_ONE);
+    const uint32_t deadline_ms = (uint32_t)inventory_insert_deadline() * 1000u;
     const uint32_t start = millis();
     unsigned inserted = 0, previous = baseline;
     uint32_t since = 0;
     int ch = -1;
-    while (!nfc_auto_cancelled && millis() - start < 120000) {
+    while (!nfc_auto_cancelled && millis() - start < deadline_ms) {
         vTaskDelay(pdMS_TO_TICKS(550));
         if (!parse_feeder_fresh(&f, err, sizeof(err), ip, port) || f.busy_print) {
-            act_set(AR_ERR, "Estado da U1 mudou. Leia a tag novamente."); return;
+            act_set(AR_ERR, S_NFC_STATE_CHANGED); return;
         }
         for (const auto &sensor : f.ch) {
             if (!sensor.module_exist || strcmp(sensor.channel_error, "ok") ||
                 strstr(sensor.channel_state, "_fail")) {
-                act_set(AR_ERR, "Um alimentador está indisponível ou com erro."); return;
+                act_set(AR_ERR, S_NFC_FEEDER_ERROR); return;
             }
         }
         const unsigned present = feeder_presence(f);
@@ -1319,34 +1254,39 @@ static void do_nfc_auto(int id, const char *request_uid) {
             since = millis();
         }
         if ((inserted & baseline) || (inserted & (inserted - 1))) {
-            act_set(AR_ERR, "Mais de um canal mudou. Leia a tag novamente."); return;
+            act_set(AR_ERR, S_NFC_TWO_FEEDERS); return;
         }
         if (!inserted) continue;
         if (!(present & inserted)) {
-            act_set(AR_ERR, "Filamento retirado. Leia a tag novamente."); return;
+            act_set(AR_ERR, S_NFC_REMOVED); return;
         }
         ch = __builtin_ctz(inserted);
+        {
+            char m[96]; snprintf(m, sizeof(m), S_NFC_FEEDING, ch + 1);
+            act_set(AR_RUNNING, m);
+        }
         if (preload_done(f.ch[ch]) && millis() - since >= 1200) break;
         ch = -1;
     }
     if (ch < 0 || nfc_auto_cancelled) {
-        act_set(AR_ERR, nfc_auto_cancelled ? "Associação cancelada." : "Prazo de inserção esgotado."); return;
+        act_set(AR_ERR, nfc_auto_cancelled ? S_NFC_CANCELLED : S_NFC_TIMEOUT); return;
     }
     if (!require_external(ip, port, err, sizeof(err)) ||
         !nfc_spool_matches(ip, port, uid, id, err, sizeof(err)) ||
         !parse_feeder_fresh(&f, err, sizeof(err), ip, port) ||
         !idle_for_manual(&f, err, sizeof(err), false) || nfc_auto_cancelled ||
         (feeder_presence(f) & ~baseline) != inserted || !preload_done(f.ch[ch])) {
-        act_set(AR_ERR, err[0] ? err : "Estado mudou. Leia a tag novamente."); return;
+        act_set(AR_ERR, err[0] ? err : S_NFC_STATE_CHANGED); return;
     }
     for (int i = 0; i < 4; ++i) {
         if (i != ch && f.ch[i].filament_detected && f.ch[i].spool_id == id) {
-            act_set(AR_ERR, "Este rolo já está em outro alimentador."); return;
+            char m[80]; snprintf(m, sizeof(m), S_NFC_ALREADY_IN, i + 1);
+            act_set(AR_ERR, m); return;
         }
     }
     JsonDocument command(psram_json());
     command["channel"] = ch;
-    command["info"]["CARD_TYPE"] = "NTAG";
+    command["info"]["CARD_TYPE"] = nfc_auto_m1 ? "M1" : "NTAG"; /* Spec v1 */
     JsonArray bytes = command["info"]["CARD_UID"].to<JsonArray>();
     for (size_t i = 0; uid[i]; i += 2) {
         const char pair[] = {uid[i], uid[i + 1], 0};
@@ -1358,15 +1298,21 @@ static void do_nfc_auto(int id, const char *request_uid) {
     const bool sent = u1_post(ip, port, "/printer/filament_detect/set", payload,
                               6000, &len, err, sizeof(err));
     // On a lost reply, check the slot without repeating the write.
+    // Spec v1: 4 leituras seguidas em até 20 s.
+    act_set(AR_RUNNING, S_NFC_CONFIRMING);
     const uint32_t verifying = millis();
     unsigned confirmed = 0;
-    while (millis() - verifying < 18000) {
+    while (millis() - verifying < 20000) {
         char observed[21]{};
         if (parse_feeder_fresh(&f, err, sizeof(err), ip, port, ch, observed) &&
             f.ch[ch].filament_detected && f.ch[ch].spool_id == id && !strcmp(uid, observed)) {
-            if (++confirmed == 2) {
-                char message[112];
-                snprintf(message, sizeof(message), "Rolo #%d confirmado no alimentador %d.", id, ch + 1);
+            if (++confirmed == 4) {
+                char message[160], idn[96];
+                WarehouseSpool *sp = (WarehouseSpool *)psram_z(sizeof(WarehouseSpool));
+                if (sp && get_spool_copy(id, sp)) snprintf(idn, sizeof(idn), "#%d · %s %s · %s", id, sp->info.vendor, sp->info.material, sp->info.name);
+                else snprintf(idn, sizeof(idn), "#%d", id);
+                free(sp);
+                snprintf(message, sizeof(message), S_NFC_LINKED, ch + 1, idn);
                 history_add(message);
                 act_set(AR_OK, message, id);
                 return;
@@ -1374,30 +1320,33 @@ static void do_nfc_auto(int id, const char *request_uid) {
         } else confirmed = 0;
         vTaskDelay(pdMS_TO_TICKS(750));
     }
-    act_set(AR_ERR, sent ? "U1 não confirmou o rolo e o UID no slot." : "Envio sem confirmação. Confira o slot na U1.");
+    char m[120];
+    snprintf(m, sizeof(m), S_NFC_NOT_CONFIRMED, ch + 1);
+    act_set(AR_ERR, m);
+    (void)sent;
 }
 
 static void do_feed(int ch, bool load) {
     char ip[16] = {0};
     uint16_t port = 7125;
     char err[200] = {0};
-    if (ch < 0 || ch > 3) { act_set(AR_ERR, "Feeder inválido."); return; }
-    if (!endpoint(ip, &port)) { act_set(AR_ERR, "U1 não encontrada"); return; }
+    if (ch < 0 || ch > 3) { act_set(AR_ERR, S_FEEDER_INVALID); return; }
+    if (!endpoint(ip, &port)) { act_set(AR_ERR, S_CONN_U1_NOT_FOUND); return; }
     FeederInfo f{};
     if (!parse_feeder_fresh(&f, err, sizeof(err), ip, port)) { act_set(AR_ERR, err); return; }
     if (!idle_for_manual(&f, err, sizeof(err), false)) { act_set(AR_ERR, err); return; }
     if (!f.ch[ch].filament_detected) {
-        snprintf(err, sizeof(err), "Insira o filamento no feeder %d antes de carregar ou retirar.", ch + 1);
+        snprintf(err, sizeof(err), S_FEED_INSERT_FIRST, ch + 1);
         act_set(AR_ERR, err); return;
     }
     if (load) {
         const char *mat = f.ch[ch].filament_type;
         if (!mat[0] || strcasecmp(mat, "NONE") == 0) {
-            act_set(AR_ERR, "Identifique o material antes de carregar.");
+            act_set(AR_ERR, S_FEED_NO_MATERIAL);
             return;
         }
         if (f.ch[ch].disable_auto) {
-            act_set(AR_ERR, "Alimentação automática desativada neste feeder.");
+            act_set(AR_ERR, S_FEED_AUTO_OFF);
             return;
         }
     }
@@ -1410,29 +1359,38 @@ static void do_feed(int ch, bool load) {
     int len = 0;
     const char *expected = load ? "load_finish" : "unload_finish";
     if (!strcmp(f.ch[ch].channel_state, expected)) {
-        act_set(AR_OK, load ? "A U1 já informa carga concluída." : "A U1 já informa retirada concluída.");
+        act_set(AR_OK, load ? S_FEED_ALREADY_LOADED : S_FEED_ALREADY_UNLOADED);
         return;
     }
-    u1_post(ip, port, "/printer/gcode/script", bj, 60000, &len, err, sizeof(err));
+    {
+        char m[64]; snprintf(m, sizeof(m), load ? S_FEED_LOADING : S_FEED_UNLOADING, ch + 1);
+        act_set(AR_RUNNING, m);
+    }
+    /* Spec v1: janela total de 240 s, sem repetir o comando; confirma por channel_state.
+     * (HTTPClient limita o timeout de leitura a 65 s; o resto é polling.) */
     const uint32_t started = millis();
-    while (millis() - started < 90000) {
+    u1_post(ip, port, "/printer/gcode/script", bj, 60000, &len, err, sizeof(err));
+    while (millis() - started < 240000) {
         if (parse_feeder_fresh(&f, err, sizeof(err), ip, port)) {
             const FeederChannel &channel = f.ch[ch];
             if (!strcmp(channel.channel_state, expected) && !strcmp(channel.channel_error, "ok")) {
                 char message[112];
-                snprintf(message, sizeof(message), "%s confirmada no alimentador %d.",
-                         load ? "Carga" : "Retirada", ch + 1);
+                snprintf(message, sizeof(message), load ? S_FEED_LOAD_DONE : S_FEED_UNLOAD_DONE, ch + 1);
                 history_add(message);
                 act_set(AR_OK, message);
                 return;
             }
             if (strstr(channel.channel_state, "_fail") || strcmp(channel.channel_error, "ok")) {
-                act_set(AR_ERR, "A U1 reportou uma falha no alimentador."); return;
+                char m[80]; snprintf(m, sizeof(m), S_FEED_FAIL, ch + 1);
+                act_set(AR_ERR, m); return;
             }
         }
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
-    act_set(AR_ERR, "Alimentação sem confirmação. Confira o alimentador na U1.");
+    {
+        char m[96]; snprintf(m, sizeof(m), S_FEED_UNCONFIRMED, ch + 1);
+        act_set(AR_ERR, m);
+    }
 }
 
 static bool control_reply(int len) {
@@ -1672,6 +1630,9 @@ void inventory_init(void) {
     memset(&g_act, 0, sizeof(g_act));
     if (g_inv) g_inv->status = INV_IDLE;
     if (g_cat) g_cat->status = INV_IDLE;
+    spool_prefs.begin("u1spool", false);
+    insert_deadline_s = spool_prefs.getInt("insert_s", 180);
+    if (insert_deadline_s < 60 || insert_deadline_s > 600) insert_deadline_s = 180;
 }
 
 void inventory_start_task(void) {
@@ -1750,6 +1711,20 @@ void inventory_request_assign(int channel, int spool_id) {
     p_id = spool_id;
     xSemaphoreGive(mutex);
     enqueue(ACT_ASSIGN);
+}
+
+int inventory_insert_deadline(void) { return insert_deadline_s; }
+
+void inventory_set_insert_deadline(int seconds) {
+    if (seconds < 60) seconds = 60;
+    if (seconds > 600) seconds = 600;
+    insert_deadline_s = seconds;
+    spool_prefs.putInt("insert_s", seconds);
+}
+
+bool inventory_request_nfc_auto_typed(int spool_id, const char *uid, bool mifare_classic) {
+    nfc_auto_m1 = mifare_classic;
+    return inventory_request_nfc_auto(spool_id, uid);
 }
 
 bool inventory_request_nfc_auto(int spool_id, const char *uid) {

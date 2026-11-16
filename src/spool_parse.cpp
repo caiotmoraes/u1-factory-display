@@ -101,52 +101,173 @@ bool spool_validate_uid(const char *raw, char *normalized, size_t n, char *err, 
     return true;
 }
 
+/* ---- U1 Spool Spec v1: extra.card_uids ---- */
+
+namespace {
+struct UidAcc {
+    char *valid; size_t vn; int nvalid;
+    char *invalid; size_t in;
+    bool overflow;
+};
+
+bool uid_sep(char c) {
+    return c == ',' || c == ';' || c == ' ' || c == '\t' || c == '\r' || c == '\n' ||
+           c == '[' || c == ']' || c == '"' || c == '\'';
+}
+
+bool list_has(const char *list, const char *tok) {
+    size_t L = strlen(tok);
+    for (const char *p = list; p && *p;) {
+        const char *e = strchr(p, ',');
+        size_t n = e ? (size_t)(e - p) : strlen(p);
+        if (n == L && !memcmp(p, tok, L)) return true;
+        p = e ? e + 1 : nullptr;
+    }
+    return false;
+}
+
+void list_add(char *list, size_t n, const char *tok, bool *overflow) {
+    size_t cur = strlen(list), L = strlen(tok);
+    if (cur + (cur ? 1 : 0) + L + 1 > n) { if (overflow) *overflow = true; return; }
+    if (cur) list[cur++] = ',';
+    memcpy(list + cur, tok, L + 1);
+}
+
+void acc_token(UidAcc &a, const char *tok, size_t len) {
+    if (!len) return;
+    char raw[48];
+    if (len >= sizeof(raw)) len = sizeof(raw) - 1;
+    memcpy(raw, tok, len);
+    raw[len] = 0;
+    bool chars_ok = true;
+    for (const char *p = raw; *p; p++) {
+        unsigned char c = (unsigned char)*p;
+        if (!(isxdigit(c) || c == ':' || c == '-')) { chars_ok = false; break; }
+    }
+    char norm[48];
+    int d = spool_normalize_uid(raw, norm, sizeof(norm));
+    if (chars_ok && (d == 8 || d == 14 || d == 20)) {
+        if (!list_has(a.valid, norm)) {
+            bool of = false;
+            list_add(a.valid, a.vn, norm, &of);
+            if (of) a.overflow = true; else a.nvalid++;
+        }
+    } else if (a.invalid && a.in && !list_has(a.invalid, raw)) {
+        bool of = false;
+        list_add(a.invalid, a.in, raw, &of);
+    }
+}
+
+void acc_split(UidAcc &a, const char *s) {
+    while (s && *s) {
+        while (*s && uid_sep(*s)) s++;
+        const char *e = s;
+        while (*e && !uid_sep(*e)) e++;
+        acc_token(a, s, (size_t)(e - s));
+        s = e;
+    }
+}
+
+void acc_value(UidAcc &a, const char *s, int depth) {
+    if (!s) return;
+    while (*s && isspace((unsigned char)*s)) s++;
+    if (!*s) return;
+    if (depth < 2 && (*s == '"' || *s == '[')) {
+        JsonDocument d = SPOOL_DOC();
+        if (!deserializeJson(d, s)) {
+            if (d.is<JsonArrayConst>()) {
+                for (JsonVariantConst it : d.as<JsonArrayConst>())
+                    if (it.is<const char *>()) acc_split(a, it.as<const char *>());
+                return;
+            }
+            if (d.is<const char *>()) { acc_value(a, d.as<const char *>(), depth + 1); return; }
+        }
+    }
+    acc_split(a, s);
+}
+} // namespace
+
+int spool_uids_parse(const char *raw, char *valid, size_t vn, char *invalid, size_t in) {
+    char vtmp[SPOOL_UIDS_LEN] = {0};
+    UidAcc a{valid ? valid : vtmp, valid ? vn : sizeof(vtmp), 0, invalid, in, false};
+    if (a.valid && a.vn) a.valid[0] = 0;
+    if (invalid && in) invalid[0] = 0;
+    acc_value(a, raw, 0);
+    return a.nvalid;
+}
+
 void spool_parse_uids_from_extra(const char *card_uids_raw, char *out, size_t n) {
     if (!out || n == 0) return;
+    spool_uids_parse(card_uids_raw, out, n, nullptr, 0);
+}
+
+bool spool_uid_listed(const char *list, const char *uid) {
+    char norm[48];
+    if (!list || !uid) return false;
+    spool_normalize_uid(uid, norm, sizeof(norm));
+    if (!norm[0]) return false;
+    return list_has(list, norm);
+}
+
+int spool_uids_canonical(const char *raw, const char *add, char *out, size_t n) {
+    if (out && n) out[0] = 0;
+    char norm[48];
+    char tmp[64];
+    if (!spool_validate_uid(add, norm, sizeof(norm), tmp, sizeof(tmp))) return -2;
+    char valid[SPOOL_UIDS_LEN + 24] = {0}, invalid[SPOOL_UIDS_LEN] = {0};
+    int nv = spool_uids_parse(raw, valid, sizeof(valid), invalid, sizeof(invalid));
+    int rc = 1;
+    if (list_has(valid, norm)) rc = 0;
+    else {
+        if (nv >= SPOOL_UIDS_MAX) return -1;
+        bool of = false;
+        list_add(valid, sizeof(valid), norm, &of);
+        if (of) return -1;
+    }
+    char joined[sizeof(valid) + sizeof(invalid) + 2];
+    snprintf(joined, sizeof(joined), "%s%s%s", valid, invalid[0] ? "," : "", invalid);
+    JsonDocument q = SPOOL_DOC();
+    q.set(joined);
+    if (!out || measureJson(q) >= n) return -1;
+    serializeJson(q, out, n);
+    return rc;
+}
+
+bool spool_card_uid_hex(const char *json_value, char *out, size_t n) {
+    if (!out || n < 21) return false;
     out[0] = 0;
-    if (!card_uids_raw || !card_uids_raw[0]) return;
-    /* Pode vir "\"AA,BB\"", "AA,BB", "[\"AA\",\"BB\"]" */
-    const char *s = card_uids_raw;
-    char buf[256];
-    cpy(buf, sizeof(buf), s);
-    /* tira aspas externas repetidas */
-    size_t L = strlen(buf);
-    while (L >= 2 && buf[0] == '"' && buf[L - 1] == '"') {
-        memmove(buf, buf + 1, L - 2);
-        buf[L - 2] = 0;
-        L -= 2;
-    }
-    /* se for array JSON simples, troca [ ] " por espaço */
-    for (char *p = buf; *p; p++) {
-        if (*p == '[' || *p == ']' || *p == '"' || *p == '\'' ) *p = ' ';
-        if (*p == ';') *p = ',';
-    }
-    char acc[SPOOL_UIDS_LEN];
-    acc[0] = 0;
-    char *save = nullptr;
-    /* strtok-like */
-    char *tok = buf;
-    while (*tok) {
-        while (*tok == ' ' || *tok == ',' || *tok == '\t') tok++;
-        if (!*tok) break;
-        char *end = tok;
-        while (*end && *end != ',' && *end != ' ' && *end != '\t') end++;
-        char c = *end;
-        *end = 0;
-        char uid[24];
-        spool_normalize_uid(tok, uid, sizeof(uid));
-        if (uid[0]) {
-            int d = (int)strlen(uid);
-            if (d == 8 || d == 14 || d == 20) {
-                if (acc[0]) strncat(acc, ",", sizeof(acc) - strlen(acc) - 1);
-                strncat(acc, uid, sizeof(acc) - strlen(acc) - 1);
-            }
+    if (!json_value || !json_value[0]) return false;
+    JsonDocument d = SPOOL_DOC();
+    if (deserializeJson(d, json_value)) return false;
+    unsigned bytes[10];
+    int count = 0;
+    if (d.is<JsonArrayConst>()) {
+        for (JsonVariantConst v : d.as<JsonArrayConst>()) {
+            if (count >= 10 || !v.is<long>()) return false;
+            long b = v.as<long>();
+            if (b < 0 || b > 255) return false;
+            bytes[count++] = (unsigned)b;
         }
-        *end = c;
-        tok = c ? end + 1 : end;
-        (void)save;
-    }
-    cpy(out, n, acc);
+    } else if (d.is<const char *>()) {
+        const char *s = d.as<const char *>();
+        while (*s) {
+            while (*s == ' ' || *s == ',' || *s == '\t') s++;
+            if (!*s) break;
+            if (!isdigit((unsigned char)*s) || count >= 10) return false;
+            long b = 0;
+            int digits = 0;
+            while (isdigit((unsigned char)*s)) { b = b * 10 + (*s++ - '0'); if (++digits > 3) return false; }
+            if (*s && *s != ' ' && *s != ',' && *s != '\t') return false;
+            if (b > 255) return false;
+            bytes[count++] = (unsigned)b;
+        }
+    } else return false;
+    if (count != 4 && count != 7 && count != 10) return false;
+    bool any = false;
+    for (int i = 0; i < count; i++) any |= bytes[i] != 0;
+    if (!any) return false;
+    for (int i = 0; i < count; i++) snprintf(out + i * 2, 3, "%02X", bytes[i]);
+    return true;
 }
 
 void spool_identity(const WarehouseSpool *s, char *out, size_t n) {
@@ -239,40 +360,38 @@ static void fill_from_obj(JsonObjectConst obj, WarehouseSpool *w, int expected_i
     cpy(w->comment, sizeof(w->comment), obj["comment"] | "");
     cpy(w->lot, sizeof(w->lot), obj["lot_nr"] | "");
 
-    /* extra.card_uids — vários formatos */
-    char raw[192] = {0};
+    /* extra.card_uids — leitura tolerante (Spec v1) + tags[].uid */
+    char raw[SPOOL_UIDS_LEN * 2] = {0};
     if (obj["extra"].is<JsonObjectConst>()) {
         JsonVariantConst cu = obj["extra"]["card_uids"];
         if (cu.is<const char *>()) cpy(raw, sizeof(raw), cu.as<const char *>());
-        else if (cu.is<JsonArrayConst>()) {
-            JsonArrayConst a = cu.as<JsonArrayConst>();
-            size_t off = 0;
-            for (JsonVariantConst it : a) {
-                const char *u = it.as<const char *>();
-                if (!u) continue;
-                if (off + 2 < sizeof(raw)) {
-                    if (off) raw[off++] = ',';
-                    strncpy(raw + off, u, sizeof(raw) - off - 1);
-                    off = strlen(raw);
-                }
-            }
-        }
+        else if (cu.is<JsonArrayConst>()) serializeJson(cu, raw, sizeof(raw));
     }
-    /* também tags[{uid}] */
+    spool_uids_parse(raw, w->card_uids, sizeof(w->card_uids), w->uids_invalid, sizeof(w->uids_invalid));
     if (obj["tags"].is<JsonArrayConst>()) {
+        char tags[SPOOL_UIDS_LEN] = {0};
+        size_t off = 0;
         for (JsonVariantConst t : obj["tags"].as<JsonArrayConst>()) {
-            if (!t.is<JsonObjectConst>()) continue;
-            const char *u = t["uid"] | "";
-            if (u[0]) {
-                size_t L = strlen(raw);
-                if (L + 2 < sizeof(raw)) {
-                    if (L) raw[L] = ',', raw[L + 1] = 0;
-                    strncat(raw, u, sizeof(raw) - strlen(raw) - 1);
-                }
+            const char *u = t.is<JsonObjectConst>() ? (t["uid"] | "") : "";
+            size_t L = strlen(u);
+            if (!L || off + L + 2 >= sizeof(tags)) continue;
+            if (off) tags[off++] = ',';
+            memcpy(tags + off, u, L + 1);
+            off += L;
+        }
+        char tv[SPOOL_UIDS_LEN] = {0};
+        spool_uids_parse(tags, tv, sizeof(tv), nullptr, 0);
+        for (char *p = tv; *p;) {
+            char *e = strchr(p, ',');
+            if (e) *e = 0;
+            if (!spool_uid_listed(w->card_uids, p)) {
+                bool of = false;
+                list_add(w->card_uids, sizeof(w->card_uids), p, &of);
             }
+            if (!e) break;
+            p = e + 1;
         }
     }
-    spool_parse_uids_from_extra(raw, w->card_uids, sizeof(w->card_uids));
 }
 
 static JsonVariantConst unwrap(JsonDocument &doc, char *err, size_t en, bool *had_err) {

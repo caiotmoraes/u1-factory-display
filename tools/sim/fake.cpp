@@ -88,6 +88,10 @@ void inventory_request_create(const CreateSpoolReq *) {}
 void inventory_request_delete(int, const char *) {}
 void inventory_request_assign(int, int) {}
 bool inventory_request_nfc_auto(int, const char *) { return true; }
+bool inventory_request_nfc_auto_typed(int, const char *, bool) { return true; }
+static int sim_deadline = 180;
+int inventory_insert_deadline(void) { return sim_deadline; }
+void inventory_set_insert_deadline(int s) { sim_deadline = s; }
 void inventory_cancel_nfc_auto(void) {}
 void inventory_request_feed(int, bool) {}
 bool inventory_copy(InventorySnapshot *out, uint32_t *seq) {
@@ -97,7 +101,18 @@ bool inventory_copy(InventorySnapshot *out, uint32_t *seq) {
     return f;
 }
 bool inventory_copy_catalog(CatalogSnapshot *, uint32_t *seq) { if (seq) *seq = 1; return false; }
-bool inventory_copy_action(ActionResult *, uint32_t *seq) { if (seq) *seq = 1; return false; }
+ActionResult fake_act;
+uint32_t fake_act_seq = 1;
+bool inventory_copy_action(ActionResult *out, uint32_t *seq) {
+    bool f = !seq || *seq != fake_act_seq;
+    if (f && out) *out = fake_act;
+    if (seq) *seq = fake_act_seq;
+    return f;
+}
+WarehouseSpool *fake_spool_mut(int id) {
+    for (int i = 0; inv && i < inv->count; i++) if (inv->items[i].info.id == id) { inv_seq++; return &inv->items[i]; }
+    return nullptr;
+}
 const WarehouseSpool *inventory_find(const InventorySnapshot *s, int id) {
     if (!s) return nullptr;
     for (int i = 0; i < s->count; i++) if (s->items[i].info.id == id) return &s->items[i];
@@ -115,7 +130,9 @@ void control_copy_files(ControlFiles &out) {
 void nfc_init() {}
 bool nfc_present() { return true; }
 bool nfc_request(int) { return true; }
-bool nfc_result(NfcResult &) { return false; }
+NfcResult fake_nfc;
+bool fake_nfc_ready = false;
+bool nfc_result(NfcResult &r) { if (!fake_nfc_ready) return false; r = fake_nfc; fake_nfc_ready = false; return true; }
 void nfc_cancel() {}
 void wifi_setup_start(void) {}
 bool wifi_is_portal(void) { return false; }
