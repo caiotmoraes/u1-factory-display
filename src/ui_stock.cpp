@@ -312,7 +312,160 @@ void ui_warehouse_on_show(void) {
     fill_list();
 }
 
+static lv_obj_t *nfc_target;
+static lv_obj_t *nfc_status;
+static uint32_t nfc_inspect_seq;
+static char nfc_inspect_uid[21];
+static char nfc_matched_uid[21];
+static lv_obj_t *nfc_auto_button;
+static int nfc_matched_spool;
+static bool nfc_tag_is_ntag;
+static bool nfc_auto_active;
+static uint32_t nfc_auto_seq;
+
+static void cancel_nfc_on_delete(lv_event_t *e) {
+    if (lv_event_get_target(e) == nfc_target) {
+        nfc_cancel();
+        nfc_target = nullptr;
+    }
+}
+
+static void scan_nfc(lv_obj_t *target, int spool_id) {
+    if (nfc_auto_active) {
+        ui_toast("Aguarde a associacao ou feche o menu para cancelar.", false);
+        return;
+    }
+    if (!nfc_request(spool_id)) {
+        ui_toast("Leitor ocupado. Tente novamente.", true);
+        return;
+    }
+    nfc_target = target;
+    lv_obj_add_event_cb(target, cancel_nfc_on_delete, LV_EVENT_DELETE, nullptr);
+    if (target == nfc_status) lv_label_set_text(target, "Aproxime uma tag e mantenha no leitor.");
+    else ui_toast("Aproxime uma tag do PN532.", false);
+}
+
+static void nfc_tick() {
+    NfcResult result{};
+    if (nfc_result(result) && nfc_target) {
+        lv_obj_remove_event_cb(nfc_target, cancel_nfc_on_delete);
+        if (nfc_target == nfc_status) {
+            if (result.ok && result.uid[0]) {
+                if (result.spool_id > 0) {
+                    lv_label_set_text_fmt(nfc_status, "%s\nUID: %s\nNDEF: Spoolman #%d",
+                                          result.message, result.uid, result.spool_id);
+                } else {
+                    lv_label_set_text_fmt(nfc_status, "%s\nUID: %s", result.message, result.uid);
+                }
+                if (!result.writing && !inventory_busy()) {
+                    ui_cpy(nfc_inspect_uid, sizeof(nfc_inspect_uid), result.uid);
+                    nfc_tag_is_ntag = result.ntag;
+                    nfc_inspect_seq = ui_act_seq;
+                    inventory_request_inspect(result.uid);
+                }
+            } else {
+                lv_label_set_text(nfc_status, result.message);
+            }
+        } else if (result.ok) {
+            lv_textarea_set_text(nfc_target, result.uid);
+        } else {
+            ui_toast(result.message, true);
+        }
+        nfc_target = nullptr;
+    }
+    if (nfc_status && nfc_inspect_uid[0] && ui_act_seq != nfc_inspect_seq &&
+        ui_act.kind == ACT_INSPECT && (ui_act.state == AR_OK || ui_act.state == AR_ERR) &&
+        !strcmp(ui_act.inspect_uid, nfc_inspect_uid)) {
+        const char *previous = lv_label_get_text(nfc_status);
+        char status[320];
+        snprintf(status, sizeof(status), "%s\n%s", previous, ui_act.message);
+        lv_label_set_text(nfc_status, status);
+        if (ui_act.state == AR_OK && nfc_tag_is_ntag) {
+            nfc_matched_spool = ui_act.spool_id;
+            ui_cpy(nfc_matched_uid, sizeof(nfc_matched_uid), nfc_inspect_uid);
+            lv_obj_clear_state(nfc_auto_button, LV_STATE_DISABLED);
+        }
+        nfc_inspect_uid[0] = 0;
+    }
+    if (nfc_status && nfc_auto_active && ui_act_seq != nfc_auto_seq &&
+        ui_act.kind == ACT_NFC_AUTO) {
+        nfc_auto_seq = ui_act_seq;
+        if (ui_act.message[0]) lv_label_set_text(nfc_status, ui_act.message);
+        if (ui_act.state == AR_OK || ui_act.state == AR_ERR) nfc_auto_active = false;
+    }
+}
+
+static void open_nfc(lv_event_t *) {
+    lv_obj_t *box = ui_overlay_box("NFC DE BANCADA", 660, 380);
+    nfc_inspect_uid[0] = 0;
+    nfc_matched_spool = 0;
+    nfc_tag_is_ntag = false;
+    nfc_status = lv_label_create(box);
+    lv_obj_add_event_cb(nfc_status, [](lv_event_t *) {
+        if (nfc_auto_active) inventory_cancel_nfc_auto();
+        nfc_auto_active = false;
+        nfc_status = nullptr;
+        nfc_auto_button = nullptr;
+        nfc_inspect_uid[0] = 0;
+    }, LV_EVENT_DELETE, nullptr);
+    ui_style_label(nfc_status, &lv_font_montserrat_14, COLOR_CREAM);
+    lv_label_set_long_mode(nfc_status, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(nfc_status, 610);
+    lv_obj_set_pos(nfc_status, 8, 50);
+    lv_label_set_text(nfc_status, nfc_present() ? "PN532 conectado." : "Aguardando PN532 na UART2.");
+
+    ui_make_btn(box, 8, 146, 200, 36, "LER TAG", COLOR_MINT, 0x081725,
+                [](lv_event_t *) {
+                    if (nfc_auto_active) return;
+                    nfc_inspect_uid[0] = 0;
+                    nfc_matched_spool = 0;
+                    lv_obj_add_state(nfc_auto_button, LV_STATE_DISABLED);
+                    scan_nfc(nfc_status, 0);
+                }, nullptr);
+    nfc_auto_button = ui_make_btn(box, 222, 146, 350, 36, "ASSOCIAR AO INSERIR",
+                                COLOR_CARD, COLOR_MINT, [](lv_event_t *) {
+        if (!inventory_request_nfc_auto(nfc_matched_spool, nfc_matched_uid)) {
+            lv_label_set_text(nfc_status, "Estoque ocupado. Tente novamente.");
+            return;
+        }
+        nfc_auto_active = true;
+        nfc_auto_seq = ui_act_seq;
+        lv_obj_add_state(nfc_auto_button, LV_STATE_DISABLED);
+        lv_label_set_text(nfc_status, "Verificando os alimentadores. Aguarde para inserir.");
+    }, nullptr);
+    lv_obj_add_state(nfc_auto_button, LV_STATE_DISABLED);
+    lv_obj_t *id = make_ta(box, 8, 205, 200, 36, "ID do rolo", 10, true);
+    lv_textarea_set_accepted_chars(id, "0123456789");
+    ui_make_btn(box, 222, 205, 200, 36, "GRAVAR TAG", COLOR_CARD, COLOR_MINT,
+                [](lv_event_t *e) {
+                    if (nfc_auto_active) return;
+                    auto *field = static_cast<lv_obj_t *>(lv_event_get_user_data(e));
+                    const long long id = strtoll(lv_textarea_get_text(field), nullptr, 10);
+                    const WarehouseSpool *spool = id > 0 && id <= INT32_MAX
+                        ? inventory_find(ui_inv, static_cast<int>(id)) : nullptr;
+                    if (!spool || spool->archived) {
+                        lv_label_set_text(nfc_status, "Digite o ID de um rolo ativo no Armazem.");
+                        return;
+                    }
+                    char question[144];
+                    snprintf(question, sizeof(question), "Gravar Spoolman #%d em uma tag NTAG vazia?",
+                             spool->info.id);
+                    ui_confirm("GRAVAR TAG", question, [](void *data) {
+                        open_nfc(nullptr);
+                        scan_nfc(nfc_status, static_cast<int>(reinterpret_cast<intptr_t>(data)));
+                    }, reinterpret_cast<void *>(static_cast<intptr_t>(id)));
+                }, id);
+    lv_obj_t *hint = lv_label_create(box);
+    ui_style_label(hint, &lv_font_montserrat_14, COLOR_MUTED);
+    lv_obj_set_pos(hint, 8, 253);
+    lv_obj_set_width(hint, 610);
+    lv_label_set_text(hint, "Gravacao NDEF em NTAG213/215/216. Para vincular o UID, use a ficha do rolo.");
+    ui_make_btn(box, 8, 299, 150, 36, "FECHAR", COLOR_CARD, COLOR_MUTED,
+                [](lv_event_t *) { ui_close_overlays(); }, nullptr);
+}
+
 void ui_warehouse_tick(void) {
+    nfc_tick();
     if (!ui_inv) return;
     uint32_t seq = ui_inv_seq;
     if (inventory_copy(ui_inv, &seq) && seq != ui_inv_seq) {
@@ -346,6 +499,7 @@ void ui_warehouse_build(void) {
     /* The two buttons were created at 12,8 — delete approach: just also create at right places.
        Let me not create at 12,8. I'll leave and add properly: */
     ui_make_btn(scr, 420, 46, 70, 28, "NOVO", COLOR_MINT, 0x081725, on_novo, nullptr);
+    ui_make_btn(scr, 502, 46, 110, 28, "NFC", COLOR_CARD, COLOR_MINT, open_nfc, nullptr);
 
     wh_status = lv_label_create(scr);
     ui_style_label(wh_status, &font_press_start_12, COLOR_MUTED);
@@ -427,8 +581,10 @@ static void open_bind(lv_event_t *) {
     lv_label_set_long_mode(h, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(h, 530);
     lv_obj_set_pos(h, 8, 36);
-    lv_label_set_text(h, "Informe o UID da tag (4, 7 ou 10 bytes). O leitor PN532 ainda nao esta ligado nesta placa.");
+    lv_label_set_text(h, "Leia a tag com o PN532 ou digite o UID (4, 7 ou 10 bytes).");
     ta_uid = make_ta(box, 8, 90, 400, 36, "AABBCCDD", 22, true);
+    ui_make_btn(box, 8, 140, 150, 36, "LER NFC", COLOR_CARD, COLOR_MINT,
+                [](lv_event_t *) { scan_nfc(ta_uid, 0); }, nullptr);
     ui_make_btn(box, 8, 200, 180, 36, "CANCELAR", COLOR_CARD, COLOR_MUTED,
                 [](lv_event_t *){ ui_close_overlays(); }, nullptr);
     ui_make_btn(box, 280, 200, 220, 36, "VINCULAR", COLOR_MINT, 0x081725,
@@ -663,14 +819,7 @@ void ui_new_spool_open(void) {
     lv_obj_set_pos(u, 8, 36);
     ta_uid = make_ta(box, 8, 54, 280, 34, "AABBCCDD", 22, true);
     ui_make_btn(box, 300, 54, 120, 34, "LER NFC", COLOR_CARD, COLOR_MUTED,
-                [](lv_event_t *) {
-                    char uid[24] = {0};
-                    if (nfc_poll(uid, sizeof(uid))) {
-                        if (ta_uid) lv_textarea_set_text(ta_uid, uid);
-                    } else {
-                        ui_toast("PN532 ainda nao esta ligado. Digite o UID.", false);
-                    }
-                }, nullptr);
+                [](lv_event_t *) { scan_nfc(ta_uid, 0); }, nullptr);
 
     lv_obj_t *f = lv_label_create(box);
     ui_style_label(f, &font_press_start_12, COLOR_MUTED);

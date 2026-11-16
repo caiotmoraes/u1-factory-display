@@ -34,8 +34,7 @@ certa.
 Pilha: pioarduino 53.03.11, Arduino-ESP32 3.1.1, ESP32_Display_Panel,
 ESP32_IO_Expander 1.1.0, esp-lib-utils 0.2.0, LVGL 8.4.0, ArduinoJson 7.
 Macros da placa: `-DESP_PANEL_BOARD_DEFAULT_USE_SUPPORTED=1
--DBOARD_WAVESHARE_ESP32_S3_TOUCH_LCD_7`. CDC no boot desligado
-(`ARDUINO_USB_CDC_ON_BOOT=0`): o serial é o chip CH343 da porta UART.
+-DBOARD_WAVESHARE_ESP32_S3_TOUCH_LCD_7`. CDC nativo no boot ligado e UART0 reservada ao PN532. O CH343 continua sendo a porta de gravação.
 
 ## O que esta versão faz (v0.4.3)
 
@@ -211,7 +210,7 @@ pio run -t upload --upload-port COMx
 esptool --chip esp32s3 --port COMx --baud 921600 write-flash 0x0 u1_factory_merged_v2.bin
 ```
 
-6. Monitor serial: `pio device monitor` (115200 baud). Filtros
+6. Monitor serial: USB nativa para diagnóstico (115200 baud). Filtros
    `esp32_exception_decoder` já estão no `platformio.ini`. Depois do reset
    o ROM deve mostrar `mode:DIO`, não `mode:QIO`.
 
@@ -397,35 +396,29 @@ Não implementada. Pré-visualizações: `../preview/proposta-armazem.png` e
 
 Nesta versão a aba ARMAZEM já lista, filtra e escreve (com confirmação), no mesmo espírito do app.
 
-## Nota: módulo NFC PN532 (só planejamento, nada ligado)
+## PN532 V3 em HSU
 
-A placa traz o barramento I2C do GT911 e do expansor CH422G nos GPIOs
-**8 (SDA)** e **9 (SCL)**, e o **mesmo** barramento sai no conector
-PH2.0 rotulado I2C. O scan do wiki ocupa **0x20–0x27** (CH422G em 0x20) e
-**0x30–0x3F**; o GT911 fica em **0x5D**.
+1. Coloque os dois DIP do PN532 em OFF e selecione UART2 na chave da Waveshare.
+2. Use o conector UART2. Cruze TXD e RXD por um conversor de nível adequado
+   para UART de 3,3 V ↔ 5 V e conecte os terras. A referência de 5 V do conversor
+   e o VCC do módulo recebem 5 V regulados de uma fonte externa.
+3. Para gravar o firmware pelo CH343, retorne a chave para UART1.
+   O firmware usa a UART0 para o PN532 e destina os logs à USB nativa.
 
-O PN532 em I2C usa o endereço **0x24 por padrão**, que **conflita** com a
-faixa do CH422G. **Não ligue o PN532 em I2C no conector I2C da placa.**
-O endereço do PN532 em geral não é alterável com confiança.
+Abra **Armazém → NFC**. **Ler tag** exibe o UID ISO 14443-A, o ID NDEF
+quando há um registro gravado pelo painel e a identificação no Spoolman
+quando o UID já está vinculado. **Gravar tag** pede o ID de um rolo ativo
+da lista e confirmação. Use uma NTAG213/215/216 vazia, formatada para NDEF
+e gravável. O painel escreve um registro de texto `Spoolman #ID` e relê a
+mesma tag para confirmar. Mantenha a tag junto ao leitor até a confirmação.
 
-Caminhos seguros para uma próxima etapa (escolher um e documentar os
-pinos no esquemático antes de soldar):
-
-1. **PN532 em SPI** — MOSI / SCK / MISO nos GPIOs **11 / 12 / 13** (header
-   SPI, se estiver livre no seu lote). O CS **não** pode ser o EXIO4 do
-   CH422G, que já é o CS do cartão SD. Escolher um GPIO livre ou outro
-   EXIO claramente disponível.
-2. **PN532 em UART** — UART1 da ESP32-S3 em dois GPIOs livres (fora da
-   matriz RGB: VSYNC 3, HSYNC 46, DE 5, PCLK 7, DATA0–15 = 14, 38, 18,
-   17, 10, 39, 0, 45, 48, 47, 21, 1, 2, 42, 41, 40; fora também de 8, 9 e
-   4, que é o IRQ do GT911).
-3. **Segundo host I2C** da ESP32-S3 em **dois GPIOs livres**, não 8/9. Aí
-   o 0x24 do PN532 não esbarra no CH422G.
-
-No firmware, o encaixe natural é um `nfc.cpp` em task própria: lê o UID,
-consulta `GET /v1/spool?allow_archived=true`, casa com `extra.card_uids` e
-abre a ficha (ou “cadastrar esta tag”). A primeira fatia NFC pode ser só
-leitura; o `PATCH` de vínculo fica junto das outras escritas.
+Para registrar o UID no Spoolman, use **NFC** na ficha do rolo ou **Ler NFC**
+no cadastro de um rolo novo. O registro NDEF e o vínculo de UID são ações
+separadas. Com a U1 ociosa em **Filament Detection → External**, leia a
+NTAG vinculada e toque em **Associar ao inserir**. Aguarde o aviso e
+insira em um único alimentador livre. O painel aguarda o pré-carregamento
+e confirma o slot depois de reler o ID e o UID na U1. Para cancelar a
+espera, feche o menu. A associação manual fica na ficha do rolo.
 
 ## Testes (não usam a U1 real nem o PC do Caio)
 
@@ -498,8 +491,7 @@ o Caio gravar.
   testados em hardware / LAN reais.
 - A recoloração das bobinas na gaveta só troca pixels marcados com
   alpha 254. O swatch do HUD é o sinal principal da cor do rolo.
-- O PN532 ainda não está ligado (gancho `nfc_hook` pronto; nunca no I2C
-  GPIO 8/9). O UID é digitado à mão até o módulo chegar.
+- A leitura e a gravação com o PN532 ainda precisam ser verificadas no módulo físico.
 - Compartilhar diagnóstico do app não existe neste painel (não há share
   sheet). O restante do Armazém cobre o que o Spool Factory faz, via
   proxy.
@@ -525,8 +517,8 @@ o Caio gravar.
 | Novo rolo (vendor/filament find-or-create, UID, pesos) | feito | UID 4/7/10 bytes, unicidade, remaining ≤ initial |
 | Excluir com id digitado + identidade | feito | Bloqueado se o rolo está num feeder |
 | Vínculo NFC `extra.card_uids` | feito | Formato JSON-quoted; `tagField`; preserva extra |
-| Entrada manual de UID | feito | PN532 ainda é um gancho |
-| Associação automática (EdgeDetector) | parcial | Inspect por UID + gancho; sem hardware e sem auto na fábrica |
+| Entrada manual de UID | feito | Usuário pode digitar ou ler o UID pelo PN532 |
+| Associação automática | feito | NTAG vinculada ao Spoolman, inserção em um alimentador livre e confirmação pela U1. |
 | Ativar rolo (`/printer/spoollink/set`) | feito | Checagens (External, filamento, idle, outro feeder) + confirmação |
 | Carga / descarga (`AUTO_FEEDING`, 240 s) | feito | Mesmas checagens + confirmação |
 | Estado dos 4 feeders | feito | Poll Moonraker |

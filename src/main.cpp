@@ -14,6 +14,7 @@ using namespace esp_panel::board;
 
 void setup() {
     Serial.begin(115200);
+    Serial.setDebugOutput(true);
     delay(200);
     Serial.println();
     Serial.println("=== U1 Factory Display  v0.4.3  (Waveshare ESP32-S3-Touch-LCD-7) ===");

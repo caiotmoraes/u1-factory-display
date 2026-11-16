@@ -69,6 +69,7 @@ typedef enum {
     ACT_CREATE,
     ACT_DELETE,
     ACT_ASSIGN,
+    ACT_NFC_AUTO,
     ACT_LOAD,
     ACT_UNLOAD
 } ActKind;
@@ -114,6 +115,8 @@ void inventory_request_bind(int id, const char *uid);
 void inventory_request_create(const CreateSpoolReq *req);
 void inventory_request_delete(int id, const char *identity);
 void inventory_request_assign(int channel, int spool_id);
+bool inventory_request_nfc_auto(int spool_id, const char *uid);
+void inventory_cancel_nfc_auto(void);
 void inventory_request_feed(int channel, bool load);
 
 /* Cópias thread-safe. Retornam true se *seq mudou (dados novos). */
