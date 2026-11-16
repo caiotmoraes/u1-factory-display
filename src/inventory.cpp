@@ -1510,6 +1510,13 @@ static void do_control() {
         }
         route = op == ControlOp::Pause ? "/printer/print/pause" :
                 op == ControlOp::Resume ? "/printer/print/resume" : "/printer/print/cancel";
+    } else if (op == ControlOp::FanSet) {
+        /* Ventiladores podem mudar durante a impressão. */
+        static const char *const fans[] = {"", "exhaust_fan", "circulation_fan", "cavity_fan"};
+        const int fan = control_value / 1000, pct = control_value % 1000;
+        if (fan < 0 || fan > 3 || pct < 0 || pct > 100) { act_set(AR_ERR, "Ventilador invalido."); return; }
+        if (fan == 0) snprintf(script, sizeof(script), "M106 S%d", (pct * 255 + 50) / 100);
+        else snprintf(script, sizeof(script), "SET_FAN_SPEED FAN=%s SPEED=%.2f", fans[fan], pct / 100.0);
     } else {
         if (!idle_job || (strcmp(idle, "Idle") && strcmp(idle, "Ready"))) {
             act_set(AR_ERR, "Aguarde a impressora ficar ociosa."); return;
@@ -1788,7 +1795,8 @@ bool inventory_copy(InventorySnapshot *out, uint32_t *seq) {
     if (!out || !mutex || !g_inv) return false;
     xSemaphoreTake(mutex, portMAX_DELAY);
     bool fresh = !seq || *seq != inv_seq;
-    memcpy(out, g_inv, sizeof(*out));
+    /* ~50 KB: copiar só quando mudou (antes eram 2 cópias a cada 200 ms). */
+    if (fresh) memcpy(out, g_inv, sizeof(*out));
     if (seq) *seq = inv_seq;
     xSemaphoreGive(mutex);
     return fresh;

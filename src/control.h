@@ -4,7 +4,8 @@
 enum class ControlOp : uint8_t {
     Files, Start, Pause, Resume, Cancel, Home, Cool, Mesh, Shaper, Offsets,
     Bed55, Bed75, Nozzle200, Nozzle235, XMinus, XPlus, YMinus, YPlus, ZMinus, ZPlus,
-    FanOff, FanHalf, FanFull, MotorsOff, SelectTool
+    FanOff, FanHalf, FanFull, MotorsOff, SelectTool,
+    FanSet /* value = ventilador * 1000 + porcentagem */
 };
 
 struct ControlFiles {

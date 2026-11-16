@@ -358,12 +358,15 @@ static uint32_t new_spool_seq;
 
 static void open_nfc_for(int spool_id, const char *intro);
 
+/* "#38 SUNLU PETG Coffee Brown". Usa o nome do filamento do Spoolman; a cor
+ * aproximada (stock_color_name) chamava o Coffee Brown 362111 de "Preto". */
 static void spool_line(const WarehouseSpool *s, char *out, size_t n) {
     char cname[32];
-    stock_color_name(s->info.color_hex, cname, sizeof(cname));
+    const char *color = s->info.name;
+    if (!color[0]) { stock_color_name(s->info.color_hex, cname, sizeof(cname)); color = cname; }
     snprintf(out, n, "#%d %s %s %s", s->info.id,
              s->info.vendor[0] ? s->info.vendor : "?",
-             s->info.material[0] ? s->info.material : "?", cname);
+             s->info.material[0] ? s->info.material : "?", color);
 }
 
 static bool uid_in_list(const char *list, const char *norm) {
@@ -489,7 +492,7 @@ static void show_lookup(const NfcResult &r) {
         snprintf(text, sizeof(text), "UID: %s\nEstoque nao carregado (%s). Toque ATUALIZA no Armazem.",
                  norm, ui_inv && ui_inv->error_msg[0] ? ui_inv->error_msg : "sem dados");
     } else if (!s) {
-        snprintf(text, sizeof(text), "UID: %s\nTag nao associada a nenhum rolo.\n"
+        snprintf(text, sizeof(text), "UID lido: %s\nTag nao associada a nenhum rolo.\n"
                  "Escolha o rolo abaixo e toque ASSOCIAR ESTA TAG.", norm);
         if (nfc_link_btn) lv_obj_clear_flag(nfc_link_btn, LV_OBJ_FLAG_HIDDEN);
     } else {
@@ -497,8 +500,8 @@ static void show_lookup(const NfcResult &r) {
         spool_line(s, line, sizeof(line));
         if (s->info.remaining_g >= 0) snprintf(rem, sizeof(rem), "%.0f g", s->info.remaining_g);
         else snprintf(rem, sizeof(rem), "desconhecido");
-        snprintf(text, sizeof(text), "UID: %s\nRolo %s%s\nRestante: %s%s%s", norm, line,
-                 s->archived ? " (arquivado)" : "", rem,
+        snprintf(text, sizeof(text), "UID lido: %s (tag: %s)\nRolo %s%s  cor #%s\nRestante: %s%s%s",
+                 norm, s->card_uids, line, s->archived ? " (arquivado)" : "", s->info.color_hex, rem,
                  r.spool_id > 0 ? "\nNDEF na tag: Spoolman #" : "",
                  "");
         if (r.spool_id > 0) {
@@ -675,9 +678,15 @@ static void open_nfc(lv_event_t *) { open_nfc_for(0, nullptr); }
 void ui_warehouse_tick(void) {
     nfc_tick();
     if (!ui_inv) return;
+    /* on_timer() (ui.cpp) já copia o estoque e avança ui_inv_seq antes deste
+     * tick; comparar com ui_inv_seq aqui nunca via a mudança e a lista ficava
+     * presa em "Carregando". O Armazém guarda a própria sequência renderizada. */
+    static uint32_t wh_rendered_seq = UINT32_MAX;
     uint32_t seq = ui_inv_seq;
-    if (inventory_copy(ui_inv, &seq) && seq != ui_inv_seq) {
-        ui_inv_seq = seq;
+    inventory_copy(ui_inv, &seq);
+    ui_inv_seq = seq;
+    if (seq != wh_rendered_seq) {
+        wh_rendered_seq = seq;
         if (wh_status) {
             if (ui_inv->status == INV_LOADING) lv_label_set_text(wh_status, "Carregando...");
             else if (ui_inv->status == INV_OK) lv_label_set_text(wh_status, "Estoque atualizado");

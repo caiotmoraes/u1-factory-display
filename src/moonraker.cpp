@@ -239,6 +239,16 @@ static bool parse_objects(const String &body, PrinterSnapshot &s) {
         s.bed_c = st["heater_bed"]["temperature"] | 0.0f;
         s.bed_target_c = st["heater_bed"]["target"] | 0.0f;
     }
+    {
+        auto fan = [&](const char *key) -> float {
+            JsonVariant v = st[key]["speed"];
+            return v.is<float>() || v.is<int>() ? v.as<float>() : -1.0f;
+        };
+        s.fan_part = fan("fan");
+        s.fan_exhaust = fan("fan_generic exhaust_fan");
+        s.fan_circulation = fan("fan_generic circulation_fan");
+        s.fan_cavity = fan("fan_generic cavity_fan");
+    }
     if (st["toolhead"].is<JsonObject>()) {
         const char *ex = st["toolhead"]["extruder"] | "extruder";
         s.active_extruder = hud_parse_extruder_name(ex);
@@ -323,10 +333,10 @@ static void parse_spool(const String &body, SpoolInfo &sp, int expected_id) {
 }
 
 static bool poll_once(PrinterSnapshot &s) {
-    char url[384];
+    char url[512];
     String body;
     snprintf(url, sizeof(url),
-             "http://%s:%u/printer/objects/query?print_stats&virtual_sdcard&display_status&extruder&extruder1&extruder2&extruder3&heater_bed&idle_timeout&webhooks&filament_feed%%20left&filament_feed%%20right&filament_detect&print_task_config&toolhead",
+             "http://%s:%u/printer/objects/query?print_stats&virtual_sdcard&display_status&extruder&extruder1&extruder2&extruder3&heater_bed&idle_timeout&webhooks&filament_feed%%20left&filament_feed%%20right&filament_detect&print_task_config&toolhead&fan&fan_generic%%20exhaust_fan&fan_generic%%20circulation_fan&fan_generic%%20cavity_fan",
              s.printer_ip, s.printer_port);
     if (!http_get(url, body, 2500)) {
         /* fallback se a U1 rejeitar objetos extras */

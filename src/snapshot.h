@@ -63,6 +63,11 @@ typedef struct {
     float nozzle_target_c;
     float bed_c;
     float bed_target_c;
+    /* Ventiladores 0..1; -1 = objeto ausente na U1. */
+    float fan_part;           /* fan */
+    float fan_exhaust;        /* fan_generic exhaust_fan */
+    float fan_circulation;    /* fan_generic circulation_fan */
+    float fan_cavity;         /* fan_generic cavity_fan */
     float filament_used;
     char print_stats[16];
 

@@ -9,6 +9,7 @@ lv_obj_t *screen, *content, *status_line, *estop_button, *file_list;
 lv_obj_t *feeder_labels[4];
 lv_obj_t *print_line;
 lv_obj_t *heat_line;
+lv_obj_t *fan_labels[4];
 enum Page { Job, Filament, Move, Heat, Calibration };
 Page page;
 ControlFiles *alloc_files() {
@@ -102,6 +103,7 @@ void build_page(Page selected) {
     lv_obj_clean(content);
     file_list = print_line = heat_line = nullptr;
     memset(feeder_labels, 0, sizeof(feeder_labels));
+    memset(fan_labels, 0, sizeof(fan_labels));
     if (page == Job) {
         print_line = label(content, 12, 0, 740, "Impressao atual");
         command(12, 48, 138, "PAUSAR", ControlOp::Pause);
@@ -143,13 +145,12 @@ void build_page(Page selected) {
         for (int i = 0; i < 6; ++i) command(12 + 170 * (i % 2), 103 + 53 * (i / 2), 148, names[i], directions[i], false);
         command(374, 44, 320, "DESLIGAR MOTORES", ControlOp::MotorsOff);
     } else if (page == Heat) {
-        heat_line = label(content, 12, 0, 730, "Temperaturas");
-        label(content, 12, 49, 730, "Mesa");
-        command(12, 75, 160, "MESA 55 C", ControlOp::Bed55);
-        command(183, 75, 160, "MESA 75 C", ControlOp::Bed75);
-        label(content, 12, 127, 730, "Cabecote para aquecimento");
+        heat_line = label(content, 12, 0, 740, "Temperaturas");
+        command(12, 26, 150, "MESA 55 C", ControlOp::Bed55);
+        command(170, 26, 150, "MESA 75 C", ControlOp::Bed75);
+        command(330, 26, 250, "DESLIGAR AQUEC.", ControlOp::Cool);
         lv_obj_t *tool = lv_dropdown_create(content);
-        lv_obj_set_pos(tool, 12, 151);
+        lv_obj_set_pos(tool, 12, 70);
         lv_obj_set_width(tool, 172);
         lv_dropdown_set_options(tool, "Cabecote 1\nCabecote 2\nCabecote 3\nCabecote 4");
         lv_dropdown_set_selected(tool, heat_tool);
@@ -157,14 +158,26 @@ void build_page(Page selected) {
             heat_tool = lv_dropdown_get_selected(lv_event_get_target(e));
             last_snapshot--;
         }, LV_EVENT_VALUE_CHANGED, nullptr);
-        command(196, 151, 174, "BICO 200 C", ControlOp::Nozzle200);
-        command(382, 151, 174, "BICO 235 C", ControlOp::Nozzle235);
-        command(567, 151, 171, "SELECIONAR", ControlOp::SelectTool);
-        command(12, 205, 323, "DESLIGAR AQUECEDORES", ControlOp::Cool);
-        label(content, 12, 252, 330, "Ventilacao da peca");
-        command(12, 280, 152, "VENT. 0%", ControlOp::FanOff, false);
-        command(178, 280, 152, "VENT. 50%", ControlOp::FanHalf, false);
-        command(344, 280, 152, "VENT. 100%", ControlOp::FanFull, false);
+        command(196, 70, 150, "BICO 200 C", ControlOp::Nozzle200);
+        command(354, 70, 150, "BICO 235 C", ControlOp::Nozzle235);
+        command(512, 70, 170, "SELECIONAR", ControlOp::SelectTool);
+        /* Ventiladores: peça, exaustão, circulador interno e cavidade. */
+        static const int pcts[] = {0, 25, 50, 75, 100};
+        for (int f = 0; f < 4; ++f) {
+            const int y = 124 + f * 54;
+            fan_labels[f] = label(content, 12, y + 10, 230, "--");
+            for (int i = 0; i < 5; ++i) {
+                char name[8];
+                snprintf(name, sizeof(name), "%d%%", pcts[i]);
+                ui_make_btn(content, 250 + i * 98, y, 90, 40, name, COLOR_CARD, COLOR_MINT,
+                            [](lv_event_t *e) {
+                    const int code = static_cast<int>(reinterpret_cast<intptr_t>(lv_event_get_user_data(e)));
+                    if (!control_submit(ControlOp::FanSet, code))
+                        ui_toast("Outra operacao esta em andamento. Tente de novo.", true);
+                    else ui_toast("Ventilador: pedido enviado a U1.", false);
+                }, reinterpret_cast<void *>(static_cast<intptr_t>(f * 1000 + pcts[i])));
+            }
+        }
     } else {
         label(content, 12, 2, 735, "Mantenha a area livre e acompanhe a U1 durante a calibracao.");
         command(12, 48, 295, "MALHA DA MESA", ControlOp::Mesh);
@@ -266,6 +279,13 @@ void control_ui_tick() {
             snprintf(text, sizeof(text), "Mesa %.0f / %.0f C  |  Cabecote %d: %.0f / %.0f C",
                      ui_snap.bed_c, ui_snap.bed_target_c, heat_tool + 1, tool.nozzle_c, tool.nozzle_target_c);
             lv_label_set_text(heat_line, text);
+        }
+        static const char *const fan_names[] = {"Peca", "Exaustao", "Circulador", "Cavidade"};
+        const float speeds[] = {ui_snap.fan_part, ui_snap.fan_exhaust, ui_snap.fan_circulation, ui_snap.fan_cavity};
+        for (int i = 0; i < 4 && fan_labels[i]; ++i) {
+            if (speeds[i] < 0) lv_label_set_text_fmt(fan_labels[i], "%s: --", fan_names[i]);
+            else lv_label_set_text_fmt(fan_labels[i], "%s: %d%%", fan_names[i],
+                                       static_cast<int>(speeds[i] * 100 + 0.5f));
         }
         for (int i = 0; i < 4 && feeder_labels[i]; ++i) {
             const auto &f = ui_snap.feeder.ch[i];
