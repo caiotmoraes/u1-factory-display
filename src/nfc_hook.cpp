@@ -127,7 +127,7 @@ void service(void *) {
         result.writing = id > 0;
         const char *message = "Sem tag. Aproxime uma tag e tente novamente.";
         detected = probe();
-        if (!detected) message = "PN532 sem resposta. Confira UART2 e HSU.";
+        if (!detected) message = "PN532 sem resposta. Confira a chave UART2 e o modo HSU.";
         else {
             const uint32_t started = millis();
             while (!cancelled && millis() - started < 12000) {
@@ -156,7 +156,9 @@ void nfc_init() {
     requests = xQueueCreate(1, sizeof(int));
     results = xQueueCreate(1, sizeof(NfcResult));
     if (requests && results &&
-        xTaskCreate(service, "pn532", 4096, nullptr, 1, nullptr) == pdPASS) return;
+        // PN532_HSU::receive() faz espera ativa sem ceder a CPU; no core 0 isso
+        // matava o IDLE0 de fome e o task watchdog (5 s, panic) reiniciava a placa.
+        xTaskCreatePinnedToCore(service, "pn532", 6144, nullptr, 1, nullptr, 1) == pdPASS) return;
     if (requests) vQueueDelete(requests);
     if (results) vQueueDelete(results);
     requests = results = nullptr;

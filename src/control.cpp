@@ -2,6 +2,7 @@
 #include "ui_priv.h"
 #include <HTTPClient.h>
 #include <atomic>
+#include <esp_heap_caps.h>
 
 namespace {
 lv_obj_t *screen, *content, *status_line, *estop_button, *file_list;
@@ -10,7 +11,14 @@ lv_obj_t *print_line;
 lv_obj_t *heat_line;
 enum Page { Job, Filament, Move, Heat, Calibration };
 Page page;
-ControlFiles files;
+ControlFiles *alloc_files() {
+    // ~4,6 KB: fica na PSRAM para não pesar na RAM interna (Wi-Fi/LVGL).
+    void *p = heap_caps_calloc(1, sizeof(ControlFiles), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!p) p = calloc(1, sizeof(ControlFiles));
+    assert(p);
+    return static_cast<ControlFiles *>(p);
+}
+ControlFiles &files = *alloc_files();
 char selection[192];
 int heat_tool;
 uint32_t rendered_files;
@@ -56,8 +64,8 @@ void confirm(lv_event_t *event) {
     case ControlOp::Shaper: message = "A U1 vai vibrar nos eixos e salvar os resultados do input shaper."; break;
     case ControlOp::Offsets: message = "Confira mesa livre e bicos limpos. Calibrar os quatro offsets? A rotina pode salvar ajustes."; break;
     case ControlOp::Cool: message = "Desligar os aquecedores com a U1 ociosa?"; break;
-    case ControlOp::MotorsOff: message = "Desligar os motores? Será preciso referenciar XYZ de novo."; break;
-    case ControlOp::SelectTool: message = "Trocar para o cabeçote selecionado? A U1 vai movimentar o carro."; break;
+    case ControlOp::MotorsOff: message = "Desligar os motores? Sera preciso referenciar XYZ de novo."; break;
+    case ControlOp::SelectTool: message = "Trocar para o cabecote selecionado? A U1 vai movimentar o carro."; break;
     default: message = "Aquecer na temperatura selecionada? Mantenha a U1 supervisionada."; break;
     }
     ui_confirm("CONFIRMAR NA U1", message, [](void *data) {
@@ -116,7 +124,7 @@ void build_page(Page selected) {
                             [](lv_event_t *event) {
                     const int a = static_cast<int>(reinterpret_cast<intptr_t>(lv_event_get_user_data(event)));
                     char question[118];
-                    snprintf(question, sizeof(question), "%s no cabeçote %d? A U1 pode aquecer e mover o filamento.",
+                    snprintf(question, sizeof(question), "%s no cabecote %d? A U1 pode aquecer e mover o filamento.",
                              a % 2 ? "Retirar" : "Carregar", a / 2 + 1);
                     ui_confirm("FILAMENTO", question, [](void *data) {
                         if (inventory_busy()) { ui_toast("Outra operacao esta em andamento.", true); return; }
@@ -139,11 +147,11 @@ void build_page(Page selected) {
         label(content, 12, 49, 730, "Mesa");
         command(12, 75, 160, "MESA 55 C", ControlOp::Bed55);
         command(183, 75, 160, "MESA 75 C", ControlOp::Bed75);
-        label(content, 12, 127, 730, "Cabeçote para aquecimento");
+        label(content, 12, 127, 730, "Cabecote para aquecimento");
         lv_obj_t *tool = lv_dropdown_create(content);
         lv_obj_set_pos(tool, 12, 151);
         lv_obj_set_width(tool, 172);
-        lv_dropdown_set_options(tool, "Cabeçote 1\nCabeçote 2\nCabeçote 3\nCabeçote 4");
+        lv_dropdown_set_options(tool, "Cabecote 1\nCabecote 2\nCabecote 3\nCabecote 4");
         lv_dropdown_set_selected(tool, heat_tool);
         lv_obj_add_event_cb(tool, [](lv_event_t *e) {
             heat_tool = lv_dropdown_get_selected(lv_event_get_target(e));
@@ -153,19 +161,19 @@ void build_page(Page selected) {
         command(382, 151, 174, "BICO 235 C", ControlOp::Nozzle235);
         command(567, 151, 171, "SELECIONAR", ControlOp::SelectTool);
         command(12, 205, 323, "DESLIGAR AQUECEDORES", ControlOp::Cool);
-        label(content, 12, 252, 330, "Ventilação da peça");
+        label(content, 12, 252, 330, "Ventilacao da peca");
         command(12, 280, 152, "VENT. 0%", ControlOp::FanOff, false);
         command(178, 280, 152, "VENT. 50%", ControlOp::FanHalf, false);
         command(344, 280, 152, "VENT. 100%", ControlOp::FanFull, false);
     } else {
-        label(content, 12, 2, 735, "Mantenha a área livre e acompanhe a U1 durante a calibração.");
+        label(content, 12, 2, 735, "Mantenha a area livre e acompanhe a U1 durante a calibracao.");
         command(12, 48, 295, "MALHA DA MESA", ControlOp::Mesh);
         command(12, 108, 295, "COMPENSAR VIBRACAO", ControlOp::Shaper);
         command(12, 168, 295, "OFFSETS 4 CABECOTES", ControlOp::Offsets);
-        label(content, 327, 52, 412, "Mede a malha na configuração atual da mesa.");
+        label(content, 327, 52, 412, "Mede a malha na configuracao atual da mesa.");
         label(content, 327, 109, 412, "Executa o input shaper do firmware e salva o resultado.");
         label(content, 327, 171, 412, "Exige XYZ referenciado e os bicos limpos.");
-        label(content, 12, 244, 723, "Se a resposta expirar, confira a U1. A rotina pode continuar em execução.");
+        label(content, 12, 244, 723, "Se a resposta expirar, confira a U1. A rotina pode continuar em execucao.");
     }
     last_snapshot--;
 }
@@ -192,7 +200,7 @@ void estop_task(void *) {
 
 bool control_estop() {
     if (stop_running.exchange(true)) return false;
-    if (xTaskCreate(estop_task, "u1-stop", 6144, nullptr, 4, nullptr) == pdPASS) return true;
+    if (xTaskCreate(estop_task, "u1-stop", 8192, nullptr, 4, nullptr) == pdPASS) return true;
     stop_running = false;
     return false;
 }
@@ -221,7 +229,7 @@ void control_ui_build() {
     estop_button = ui_make_btn(screen, 12, 8, 238, 29, "PARADA DE EMERGENCIA", 0x7A222C, COLOR_CREAM,
                               [](lv_event_t *) {
         ui_confirm("PARADA DE EMERGENCIA",
-                   "Parar imediatamente a U1? Os motores e aquecedores serão desligados.",
+                   "Parar imediatamente a U1? Os motores e aquecedores serao desligados.",
                    [](void *) {
                        if (!control_estop()) ui_toast("Nao foi possivel iniciar a parada remota.", true);
                    }, nullptr);
@@ -255,13 +263,13 @@ void control_ui_tick() {
         if (heat_line) {
             const auto &tool = ui_snap.feeder.ch[heat_tool];
             char text[135];
-            snprintf(text, sizeof(text), "Mesa %.0f / %.0f C  |  Cabeçote %d: %.0f / %.0f C",
+            snprintf(text, sizeof(text), "Mesa %.0f / %.0f C  |  Cabecote %d: %.0f / %.0f C",
                      ui_snap.bed_c, ui_snap.bed_target_c, heat_tool + 1, tool.nozzle_c, tool.nozzle_target_c);
             lv_label_set_text(heat_line, text);
         }
         for (int i = 0; i < 4 && feeder_labels[i]; ++i) {
             const auto &f = ui_snap.feeder.ch[i];
-            lv_label_set_text_fmt(feeder_labels[i], "Cabeçote %d  |  %s  |  %s  |  rolo #%d", i + 1,
+            lv_label_set_text_fmt(feeder_labels[i], "Cabecote %d  |  %s  |  %s  |  rolo #%d", i + 1,
                                   !ui_snap.moonraker_ok || !f.module_exist ? "indisponivel" :
                                   f.filament_detected ? "presente" : "vazio",
                                   f.filament_type[0] ? f.filament_type : "--", f.spool_id);

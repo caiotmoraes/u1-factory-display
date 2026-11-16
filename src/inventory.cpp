@@ -44,7 +44,8 @@ static char nfc_auto_uid[24];
 static ControlOp control_op;
 static int control_value;
 static char control_path[192];
-static ControlFiles control_files;
+static ControlFiles *control_files; /* PSRAM: ~4,6 KB */
+static ControlFiles *control_scratch; /* PSRAM: montagem da lista */
 static char p_identity[160];
 static CreateSpoolReq p_create;
 
@@ -1296,10 +1297,17 @@ static bool control_reply(int len) {
 static void control_list(const char *ip, uint16_t port) {
     char err[128]{};
     int len = 0;
-    ControlFiles files{};
+    if (!control_files || !control_scratch) { act_set(AR_ERR, "Sem memoria para a lista."); return; }
+    ControlFiles &files = *control_scratch;
+    memset(&files, 0, sizeof(files));
+    /* Só o caminho: a resposta completa (size/modified/permissions) de centenas de
+     * arquivos esgotava a RAM interna. */
+    JsonDocument filter;
+    filter["result"][0]["path"] = true;
     JsonDocument doc;
     if (!u1_get(ip, port, "/server/files/list?root=gcodes", 6000, &len, err, sizeof(err)) ||
-        deserializeJson(doc, http_buf, len) || !doc["result"].is<JsonArray>()) {
+        deserializeJson(doc, http_buf, len, DeserializationOption::Filter(filter)) ||
+        !doc["result"].is<JsonArray>()) {
         act_set(AR_ERR, err[0] ? err : "Lista de arquivos indisponivel."); return;
     }
     for (JsonObject entry : doc["result"].as<JsonArray>()) {
@@ -1313,8 +1321,8 @@ static void control_list(const char *ip, uint16_t port) {
         cpy(files.paths[files.count++], sizeof(files.paths[0]), path);
     }
     xSemaphoreTake(mutex, portMAX_DELAY);
-    files.version = control_files.version + 1;
-    control_files = files;
+    files.version = control_files->version + 1;
+    *control_files = files;
     xSemaphoreGive(mutex);
     act_set(AR_OK, files.count ? "Arquivos atualizados." : "Nenhum G-code na U1.");
 }
@@ -1490,6 +1498,8 @@ void inventory_init(void) {
     g_inv = (InventorySnapshot *)psram_z(sizeof(InventorySnapshot));
     g_cat = (CatalogSnapshot *)psram_z(sizeof(CatalogSnapshot));
     http_buf = (char *)psram_z(http_cap);
+    control_files = (ControlFiles *)psram_z(sizeof(ControlFiles));
+    control_scratch = (ControlFiles *)psram_z(sizeof(ControlFiles));
     if (!g_inv || !g_cat) Serial.println("[inventory] falha ao alocar snapshots");
     if (!http_buf) Serial.println("[inventory] falha ao alocar buffer HTTP");
     memset(&g_act, 0, sizeof(g_act));
@@ -1604,9 +1614,9 @@ bool control_submit(ControlOp op, int value, const char *path) {
 }
 
 void control_copy_files(ControlFiles &out) {
-    if (!mutex) return;
+    if (!mutex || !control_files) return;
     xSemaphoreTake(mutex, portMAX_DELAY);
-    out = control_files;
+    if (out.version != control_files->version) out = *control_files;
     xSemaphoreGive(mutex);
 }
 
