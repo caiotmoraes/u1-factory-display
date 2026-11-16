@@ -16,6 +16,7 @@
 #include <WiFiClient.h>
 #include <Preferences.h>
 #include <ArduinoJson.h>
+#include "psram_json.h"
 #include <string.h>
 #include <strings.h>
 #include <stdio.h>
@@ -205,7 +206,7 @@ static void parse_feeders(JsonObject st, FeederInfo &f) {
 }
 
 static bool parse_objects(const String &body, PrinterSnapshot &s) {
-    JsonDocument doc;
+    JsonDocument doc(psram_json());
     DeserializationError err = deserializeJson(doc, body);
     if (err) return false;
     JsonObject root = root_of(doc);
@@ -270,7 +271,7 @@ static bool parse_objects(const String &body, PrinterSnapshot &s) {
 }
 
 static bool parse_spoolman_status(const String &body, int *spool_id, bool *connected) {
-    JsonDocument doc;
+    JsonDocument doc(psram_json());
     if (deserializeJson(doc, body)) return false;
     JsonObject root = root_of(doc);
     *connected = root["spoolman_connected"] | false;
@@ -283,7 +284,7 @@ static bool parse_spoolman_status(const String &body, int *spool_id, bool *conne
 }
 
 static void parse_spool(const String &body, SpoolInfo &sp, int expected_id) {
-    JsonDocument doc;
+    JsonDocument doc(psram_json());
     if (deserializeJson(doc, body)) return;
     JsonObject root = root_of(doc);
     /* use_v2_response: { response: {...}, error: null } */
@@ -486,5 +487,5 @@ void moonraker_init(void) {
 }
 
 void moonraker_start_task(void) {
-    xTaskCreatePinnedToCore(task, "moonraker", 8192, nullptr, 3, nullptr, 0);
+    xTaskCreatePinnedToCore(task, "moonraker", 12288, nullptr, 3, nullptr, 0);
 }

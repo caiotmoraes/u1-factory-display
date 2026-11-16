@@ -9,6 +9,15 @@
 #include <SPIFFS.h>
 #include <FS.h>
 #define HIST_PATH "/history.txt"
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+/* history_add() roda na task do estoque e no boot; history_get() na task do LVGL. */
+static SemaphoreHandle_t hist_mutex;
+#define HLOCK()   do { if (hist_mutex) xSemaphoreTakeRecursive(hist_mutex, portMAX_DELAY); } while (0)
+#define HUNLOCK() do { if (hist_mutex) xSemaphoreGiveRecursive(hist_mutex); } while (0)
+#else
+#define HLOCK()   do {} while (0)
+#define HUNLOCK() do {} while (0)
 #endif
 
 static char lines[HISTORY_MAX][HISTORY_LINE];
@@ -53,6 +62,7 @@ void history_init(void) {
     inited = true;
     count = 0;
 #ifdef ARDUINO
+    hist_mutex = xSemaphoreCreateRecursiveMutex();
     if (!SPIFFS.begin(true)) {
         Serial.println("[history] SPIFFS indisponivel; so memoria");
         return;
@@ -67,9 +77,11 @@ int history_count(void) { return count; }
 bool history_get(int i, char *out, size_t n) {
     if (!out || n == 0) return false;
     out[0] = 0;
-    if (i < 0 || i >= count) return false;
-    cpy(out, n, lines[i]);
-    return true;
+    HLOCK();
+    const bool ok = i >= 0 && i < count;
+    if (ok) cpy(out, n, lines[i]);
+    HUNLOCK();
+    return ok;
 }
 
 void history_add(const char *text) {
@@ -94,6 +106,7 @@ void history_add(const char *text) {
     char line[HISTORY_LINE];
     snprintf(line, sizeof(line), "%s · %s", stamp, text);
 
+    HLOCK();
     if (count >= HISTORY_MAX) count = HISTORY_MAX - 1;
     memmove(&lines[1], &lines[0], (size_t)count * HISTORY_LINE);
     cpy(lines[0], HISTORY_LINE, line);
@@ -101,15 +114,18 @@ void history_add(const char *text) {
 #ifdef ARDUINO
     persist();
 #endif
+    HUNLOCK();
 }
 
 int history_filter(const char *query, const char *type, int *idx, int max) {
     if (!idx || max <= 0) return 0;
     int m = 0;
+    HLOCK();
     for (int i = 0; i < count && m < max; i++) {
         if (type && type[0] && strcmp(history_event_type(lines[i]), type) != 0) continue;
         if (query && query[0] && !stock_matches_query(lines[i], query)) continue;
         idx[m++] = i;
     }
+    HUNLOCK();
     return m;
 }

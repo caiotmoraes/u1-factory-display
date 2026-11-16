@@ -12,6 +12,7 @@
 #include <HTTPClient.h>
 #include <WiFiClient.h>
 #include <ArduinoJson.h>
+#include "psram_json.h"
 #include <esp_heap_caps.h>
 #include <atomic>
 #include "control.h"
@@ -44,6 +45,7 @@ static char nfc_auto_uid[24];
 static ControlOp control_op;
 static int control_value;
 static char control_path[192];
+static bool refresh_wanted;
 static ControlFiles *control_files; /* PSRAM: ~4,6 KB */
 static ControlFiles *control_scratch; /* PSRAM: montagem da lista */
 static char p_identity[160];
@@ -88,14 +90,49 @@ static bool endpoint(char *ip, uint16_t *port) {
     return moonraker_endpoint(ip, 16, port) && ip[0];
 }
 
-/* Lê o corpo HTTP para o buffer PSRAM. Retorna o código, ou -1 em falha de conexão. */
+/* Códigos próprios além dos negativos do HTTPClient. */
+#define HTTP_TRUNCATED (-100) /* corpo menor que o Content-Length (rede instável) */
+#define HTTP_TOO_BIG   (-101) /* corpo não cabe no buffer PSRAM */
+
+/* Destino de writeToStream(): grava no buffer PSRAM (resposta chunked). */
+class BufSink : public Stream {
+public:
+    BufSink(char *buf, size_t cap) : buf_(buf), cap_(cap) {}
+    size_t write(uint8_t c) override { return write(&c, 1); }
+    size_t write(const uint8_t *data, size_t n) override {
+        if (len_ + n >= cap_) { overflow_ = true; n = cap_ - 1 - len_; }
+        memcpy(buf_ + len_, data, n);
+        len_ += n;
+        return n;
+    }
+    int available() override { return 0; }
+    int read() override { return -1; }
+    int peek() override { return -1; }
+    void flush() override {}
+    size_t len() const { return len_; }
+    bool overflow() const { return overflow_; }
+private:
+    char *buf_;
+    size_t cap_, len_ = 0;
+    bool overflow_ = false;
+};
+
+/* Lê o corpo HTTP para o buffer PSRAM. Retorna o código HTTP, ou < 0 em falha.
+ * Conexão: no máximo 3 s (impressora offline não segura a fila por 8 s).
+ * O corpo é validado contra o Content-Length; chunked é decodificado. */
 static int http_do(const char *url, const char *method, const char *payload,
                    int timeout_ms, int *outlen) {
+    if (outlen) *outlen = 0;
+    if (http_buf) http_buf[0] = 0;
+    if (!WiFi.isConnected()) return HTTPC_ERROR_CONNECTION_REFUSED;
     HTTPClient http;
     int t = timeout_ms > 0 ? timeout_ms : 8000;
-    http.setConnectTimeout(t > 8000 ? 8000 : t);
-    http.setTimeout(t > 60000 ? 60000 : t);
+    if (t > 60000) t = 60000;
+    http.setConnectTimeout(t > 3000 ? 3000 : t);
+    http.setTimeout(t);
     http.setReuse(false);
+    static const char *keys[] = {"Transfer-Encoding"};
+    http.collectHeaders(keys, 1);
     if (!http.begin(url)) return -1;
     if (payload) http.addHeader("Content-Type", "application/json");
     int code;
@@ -104,27 +141,57 @@ static int http_do(const char *url, const char *method, const char *payload,
     else if (strcmp(method, "PATCH") == 0) code = http.sendRequest("PATCH", (uint8_t *)(payload ? payload : ""), payload ? strlen(payload) : 0);
     else if (strcmp(method, "DELETE") == 0) code = http.sendRequest("DELETE");
     else code = http.POST(payload ? payload : "");
+    if (code <= 0) { http.end(); return code < 0 ? code : -1; }
 
     int len = 0;
     if (http_buf && http_cap) {
-        WiFiClient *s = http.getStreamPtr();
-        unsigned long start = millis();
-        while (len < (int)http_cap - 1 && (millis() - start) < (unsigned long)t) {
-            int avail = s->available();
-            if (avail <= 0) {
-                if (!http.connected() && s->available() == 0) break;
-                delay(4);
-                continue;
-            }
-            int n = s->read((uint8_t *)http_buf + len, (int)http_cap - 1 - len);
-            if (n > 0) len += n;
-            else break;
+        const int size = http.getSize(); /* -1: desconhecido/chunked */
+        const bool chunked = http.header("Transfer-Encoding").equalsIgnoreCase("chunked");
+        if (size >= (int)http_cap) {
+            http.end();
+            return HTTP_TOO_BIG;
         }
-        http_buf[len] = 0;
+        if (chunked) {
+            BufSink sink(http_buf, http_cap);
+            int r = http.writeToStream(&sink);
+            len = (int)sink.len();
+            http_buf[len] = 0;
+            if (sink.overflow()) { http.end(); return HTTP_TOO_BIG; }
+            if (r < 0) { http.end(); if (outlen) *outlen = len; return HTTP_TRUNCATED; }
+        } else {
+            WiFiClient *s = http.getStreamPtr();
+            unsigned long last = millis();
+            const int want = size >= 0 ? size : (int)http_cap - 1;
+            while (len < want) {
+                int avail = s->available();
+                if (avail <= 0) {
+                    if (!s->connected()) break;
+                    if (millis() - last > (unsigned long)t) break; /* sem bytes novos */
+                    delay(4);
+                    continue;
+                }
+                int n = s->read((uint8_t *)http_buf + len, want - len);
+                if (n <= 0) break;
+                len += n;
+                last = millis();
+            }
+            http_buf[len] = 0;
+            if (size >= 0 && len != size) { http.end(); if (outlen) *outlen = len; return HTTP_TRUNCATED; }
+            if (size < 0 && len >= (int)http_cap - 1) { http.end(); return HTTP_TOO_BIG; }
+        }
     }
     http.end();
     if (outlen) *outlen = len;
     return code;
+}
+
+/* Mensagem curta para falhas de transporte. */
+static void http_err_msg(int code, char *err, size_t errn) {
+    if (!err) return;
+    if (code == HTTP_TRUNCATED) cpy(err, errn, "Resposta incompleta da U1 (rede instavel). Toque ATUALIZA.");
+    else if (code == HTTP_TOO_BIG) cpy(err, errn, "Resposta grande demais para a tela.");
+    else if (code == HTTPC_ERROR_READ_TIMEOUT) cpy(err, errn, "A U1 demorou a responder. Tente de novo.");
+    else cpy(err, errn, "Impressora offline / sem conexao");
 }
 
 static int http_get_url(const char *url, int timeout_ms, int *outlen) {
@@ -139,7 +206,7 @@ static int http_post_url(const char *url, const char *payload, int timeout_ms, i
 static bool proxy(const char *ip, uint16_t port,
                   const char *method, const char *path, const char *body_json,
                   int timeout_ms, int *outlen, char *err, size_t errn) {
-    JsonDocument doc;
+    JsonDocument doc(psram_json());
     doc["request_method"] = method;
     doc["path"] = path;
     doc["use_v2_response"] = true;
@@ -156,15 +223,23 @@ static bool proxy(const char *ip, uint16_t port,
     int code = http_post_url(url, payload, timeout_ms, &len);
     if (outlen) *outlen = len;
     if (code < 0) {
-        if (err) cpy(err, errn, "Sem conexao com a U1");
+        http_err_msg(code, err, errn);
+        return false;
+    }
+    if (len <= 0 && code >= 200 && code < 300 && strcmp(method, "DELETE") != 0) {
+        if (err) cpy(err, errn, "Resposta vazia da U1. Tente de novo.");
         return false;
     }
     /* Moonraker / v2 pode responder 200 com error no envelope. */
     if (http_buf && len > 0) {
         char emsg[160] = {0};
         /* tenta detectar error v2 sem parse completo do array */
-        JsonDocument ed;
-        if (!deserializeJson(ed, http_buf, len)) {
+        /* Só os campos de erro: a lista de rolos inteira não é materializada aqui. */
+        JsonDocument ef(psram_json());
+        ef["error"] = true;
+        ef["result"]["error"] = true;
+        JsonDocument ed(psram_json());
+        if (!deserializeJson(ed, http_buf, len, DeserializationOption::Filter(ef))) {
             JsonVariant r = ed["result"];
             JsonObject root = r.is<JsonObject>() ? r.as<JsonObject>() : ed.as<JsonObject>();
             if (root["error"].is<JsonObject>()) {
@@ -197,7 +272,7 @@ static bool u1_get(const char *ip, uint16_t port, const char *path, int timeout_
     char url[320];
     snprintf(url, sizeof(url), "http://%s:%u%s", ip, port, path);
     int code = http_get_url(url, timeout_ms, outlen);
-    if (code < 0) { if (err) cpy(err, errn, "Sem conexao com a U1"); return false; }
+    if (code < 0) { http_err_msg(code, err, errn); return false; }
     if (code < 200 || code >= 300) { if (err) snprintf(err, errn, "HTTP %d em %s", code, path); return false; }
     return true;
 }
@@ -206,11 +281,11 @@ static bool u1_post(const char *ip, uint16_t port, const char *path, const char 
     char url[320];
     snprintf(url, sizeof(url), "http://%s:%u%s", ip, port, path);
     int code = http_post_url(url, payload, timeout_ms, outlen);
-    if (code < 0) { if (err) cpy(err, errn, "Sem conexao com a U1"); return false; }
+    if (code < 0) { http_err_msg(code, err, errn); return false; }
     if (code < 200 || code >= 300) {
         /* tenta mensagem de erro do Moonraker */
         if (http_buf && *outlen && err) {
-            JsonDocument d;
+            JsonDocument d(psram_json());
             if (!deserializeJson(d, http_buf, *outlen)) {
                 const char *m = d["error"]["message"] | d["error"] | d["message"] | "";
                 if (m && m[0]) { cpy(err, errn, m); return false; }
@@ -245,7 +320,7 @@ static bool parse_feeder_fresh(FeederInfo *f, char *err, size_t errn, const char
                 "/printer/objects/query?filament_feed%20left&filament_feed%20right&filament_detect&print_task_config&print_stats&webhooks&idle_timeout",
                 4000, &len, err, errn))
         return false;
-    JsonDocument doc;
+    JsonDocument doc(psram_json());
     if (deserializeJson(doc, http_buf, len)) {
         cpy(err, errn, "Resposta invalida dos feeders");
         return false;
@@ -374,7 +449,8 @@ static void do_refresh(void) {
     inv_publish(INV_LOADING, nullptr);
     int len = 0;
     if (!proxy(ip, port, "GET", "/v1/spool?allow_archived=true", nullptr, 12000, &len, err, sizeof(err))) {
-        inv_publish(INV_ERROR, err[0] ? err : "Falha ao ler o estoque");
+        const bool offline = !strncmp(err, "Impressora offline", 18);
+        inv_publish(offline ? INV_OFFLINE : INV_ERROR, err[0] ? err : "Falha ao ler o estoque");
         act_set(AR_ERR, err[0] ? err : "Falha ao ler o estoque");
         return;
     }
@@ -386,6 +462,7 @@ static void do_refresh(void) {
     }
     int n = spool_parse_list(http_buf, (size_t)len, tmp, WAREHOUSE_MAX, err, sizeof(err));
     if (n < 0) {
+        Serial.printf("[inventory] JSON do estoque invalido (%d bytes): %.80s\n", len, http_buf ? http_buf : "");
         free(tmp);
         inv_publish(INV_ERROR, err[0] ? err : "JSON do estoque invalido");
         act_set(AR_ERR, err[0] ? err : "JSON invalido");
@@ -451,7 +528,7 @@ static void do_catalog(void) {
     if (!proxy(ip, port, "GET", "/v1/vendor", nullptr, 8000, &len, err, sizeof(err))) {
         act_set(AR_ERR, err); return;
     }
-    JsonDocument vdoc;
+    JsonDocument vdoc(psram_json());
     if (deserializeJson(vdoc, http_buf, len)) { act_set(AR_ERR, "Catalogo (vendor) invalido"); return; }
     JsonArray va;
     int nv = unwrap_array(vdoc, va);
@@ -473,7 +550,7 @@ static void do_catalog(void) {
     if (!proxy(ip, port, "GET", "/v1/filament", nullptr, 10000, &len, err, sizeof(err))) {
         act_set(AR_ERR, err); return;
     }
-    JsonDocument fdoc;
+    JsonDocument fdoc(psram_json());
     if (deserializeJson(fdoc, http_buf, len)) { act_set(AR_ERR, "Catalogo (filament) invalido"); return; }
     JsonArray fa;
     int nf = unwrap_array(fdoc, fa);
@@ -572,6 +649,22 @@ static void do_inspect(const char *uid) {
     act_set(AR_OK, m, first.info.id);
 }
 
+/* UID normalizado presente numa lista "A,B" (já normalizada pelo parser). */
+static bool uid_listed(const char *list, const char *norm) {
+    const char *p = list;
+    while (p && *p) {
+        char tok[24] = {0};
+        int k = 0;
+        while (*p && *p != ',' && k < 23) tok[k++] = *p++;
+        while (*p && *p != ',') p++;
+        if (*p == ',') p++;
+        char tn[24] = {0};
+        spool_normalize_uid(tok, tn, sizeof(tn));
+        if (tn[0] && !strcmp(tn, norm)) return true;
+    }
+    return false;
+}
+
 static bool unique_uid(const char *norm, int self, char *err, size_t errn) {
     if (g_inv->status != INV_OK) {
         /* tenta refresh curto: usa o que houver */
@@ -580,7 +673,7 @@ static bool unique_uid(const char *norm, int self, char *err, size_t errn) {
     int n = g_inv->count;
     /* copy ids+uids out to not hold mutex long — small */
     struct { int id; char uids[SPOOL_UIDS_LEN]; bool archived; } *rows =
-        (decltype(rows))malloc(sizeof(*rows) * (size_t)(n > 0 ? n : 1));
+        (decltype(rows))psram_z(sizeof(*rows) * (size_t)(n > 0 ? n : 1));
     if (!rows) { xSemaphoreGive(mutex); cpy(err, errn, "Sem memoria"); return false; }
     for (int i = 0; i < n; i++) {
         rows[i].id = g_inv->items[i].info.id;
@@ -614,7 +707,7 @@ static bool tag_field(const char *ip, uint16_t port, char *err, size_t errn) {
     int len = 0;
     if (!proxy(ip, port, "GET", "/v1/field/spool", nullptr, 6000, &len, err, errn))
         return false;
-    JsonDocument doc;
+    JsonDocument doc(psram_json());
     if (deserializeJson(doc, http_buf, len)) { cpy(err, errn, "Campos do Spoolman invalidos"); return false; }
     JsonArray arr;
     int n = unwrap_array(doc, arr);
@@ -632,7 +725,7 @@ static bool tag_field(const char *ip, uint16_t port, char *err, size_t errn) {
         }
     }
     /* cria o campo */
-    JsonDocument body;
+    JsonDocument body(psram_json());
     body["name"] = "Card UIDs";
     body["field_type"] = "text";
     body["order"] = 1;
@@ -650,7 +743,7 @@ static void do_update(int id, const char *location, const char *comment, bool se
     uint16_t port = 7125;
     char err[160] = {0};
     if (!endpoint(ip, &port)) { act_set(AR_ERR, "U1 nao encontrada"); return; }
-    JsonDocument body;
+    JsonDocument body(psram_json());
     body["location"] = location ? location : "";
     body["comment"] = comment ? comment : "";
     if (set_w) body["remaining_weight"] = rem;
@@ -701,7 +794,7 @@ static void do_bind(int id, const char *uid) {
     if (cur.archived) { act_set(AR_ERR, "Desarquive o rolo antes de vincular NFC."); return; }
 
     /* preserva extra e une UIDs */
-    JsonDocument src;
+    JsonDocument src(psram_json());
     if (deserializeJson(src, http_buf, len)) { act_set(AR_ERR, "JSON do rolo invalido"); return; }
     JsonObject obj = src.as<JsonObject>();
     if (src["result"].is<JsonObject>()) {
@@ -709,24 +802,61 @@ static void do_bind(int id, const char *uid) {
         if (r["response"].is<JsonObject>()) obj = r["response"].as<JsonObject>();
     } else if (src["response"].is<JsonObject>()) obj = src["response"].as<JsonObject>();
 
-    char joined[SPOOL_UIDS_LEN] = {0};
-    if (cur.card_uids[0]) {
-        snprintf(joined, sizeof(joined), "%s,%s", cur.card_uids, norm);
-    } else {
-        cpy(joined, sizeof(joined), norm);
+    if (uid_listed(cur.card_uids, norm)) {
+        char h[120];
+        snprintf(h, sizeof(h), "Tag %s ja estava associada ao rolo #%d.", norm, id);
+        act_set(AR_OK, h, id);
+        return;
     }
-    /* valor no Spoolman: JSON-quoted string, ex. "\"AABBCCDD,EEFF\"" */
-    char quoted[SPOOL_UIDS_LEN + 8];
-    snprintf(quoted, sizeof(quoted), "\"%s\"", joined);
+    /* Mantém o formato que o rolo já usa em extra.card_uids:
+     *  - lista JSON  -> "[\"A\",\"B\"]" (acrescenta o novo item)
+     *  - texto       -> "\"A,B\""        (formato do Spool Factory/SpoolLink)
+     * O valor no Spoolman é sempre texto JSON. */
+    const char *raw = obj["extra"]["card_uids"] | "";
+    char quoted[SPOOL_UIDS_LEN + 64] = {0};
+    {
+        JsonDocument old(psram_json());
+        const bool parsed = raw[0] && !deserializeJson(old, raw);
+        if (parsed && old.is<JsonArray>()) {
+            old.as<JsonArray>().add(norm);
+            if (measureJson(old) >= sizeof(quoted)) { act_set(AR_ERR, "Muitas tags neste rolo."); return; }
+            serializeJson(old, quoted, sizeof(quoted));
+        } else if (parsed && old.is<const char *>() && old.as<const char *>()[0] == '[') {
+            /* texto JSON contendo uma lista: "\"[\\\"A\\\"]\"" */
+            JsonDocument inner(psram_json());
+            if (deserializeJson(inner, old.as<const char *>()) || !inner.is<JsonArray>()) {
+                act_set(AR_ERR, "card_uids do rolo em formato desconhecido."); return;
+            }
+            inner.as<JsonArray>().add(norm);
+            char list[SPOOL_UIDS_LEN + 48] = {0};
+            if (measureJson(inner) >= sizeof(list)) { act_set(AR_ERR, "Muitas tags neste rolo."); return; }
+            serializeJson(inner, list, sizeof(list));
+            JsonDocument q(psram_json());
+            q.set(list);
+            if (measureJson(q) >= sizeof(quoted)) { act_set(AR_ERR, "Muitas tags neste rolo."); return; }
+            serializeJson(q, quoted, sizeof(quoted));
+        } else {
+            char joined[SPOOL_UIDS_LEN + 24] = {0};
+            const char *prev = parsed && old.is<const char *>() ? old.as<const char *>() :
+                               parsed ? "" : raw; /* texto cru legado */
+            if (prev[0]) snprintf(joined, sizeof(joined), "%s,%s", prev, norm);
+            else cpy(joined, sizeof(joined), norm);
+            JsonDocument q(psram_json());
+            q.set(joined);
+            if (measureJson(q) >= sizeof(quoted)) { act_set(AR_ERR, "Muitas tags neste rolo."); return; }
+            serializeJson(q, quoted, sizeof(quoted));
+        }
+    }
 
-    JsonDocument patch;
+    JsonDocument patch(psram_json());
     if (obj["extra"].is<JsonObject>()) {
         for (JsonPair kv : obj["extra"].as<JsonObject>()) {
             patch["extra"][kv.key()] = kv.value();
         }
     }
     patch["extra"]["card_uids"] = quoted;
-    char bj[512];
+    char bj[768];
+    if (measureJson(patch) >= sizeof(bj)) { act_set(AR_ERR, "Campos extras grandes demais."); return; }
     serializeJson(patch, bj, sizeof(bj));
     len = 0;
     if (!proxy(ip, port, "PATCH", path, bj, 8000, &len, err, sizeof(err))) {
@@ -736,7 +866,7 @@ static void do_bind(int id, const char *uid) {
     }
     WarehouseSpool saved{};
     spool_parse_one(http_buf, (size_t)len, &saved, id, err, sizeof(err));
-    if (saved.card_uids[0] && !strstr(saved.card_uids, norm)) {
+    if (!uid_listed(saved.card_uids, norm)) {
         act_set(AR_ERR, "Vinculo recebido sem NFC confirmado. Atualize o estoque.");
         return;
     }
@@ -754,7 +884,7 @@ static void do_bind(int id, const char *uid) {
 static int find_or_create_vendor(const char *ip, uint16_t port, const char *name, char *err, size_t errn) {
     int len = 0;
     if (!proxy(ip, port, "GET", "/v1/vendor", nullptr, 8000, &len, err, errn)) return 0;
-    JsonDocument doc;
+    JsonDocument doc(psram_json());
     if (deserializeJson(doc, http_buf, len)) { cpy(err, errn, "Lista de marcas invalida"); return 0; }
     JsonArray arr;
     unwrap_array(doc, arr);
@@ -762,13 +892,13 @@ static int find_or_create_vendor(const char *ip, uint16_t port, const char *name
         const char *n = v["name"] | "";
         if (n[0] && strcasecmp(n, name) == 0) return v["id"] | 0;
     }
-    JsonDocument body;
+    JsonDocument body(psram_json());
     body["name"] = name;
     char bj[128];
     serializeJson(body, bj, sizeof(bj));
     len = 0;
     if (!proxy(ip, port, "POST", "/v1/vendor", bj, 8000, &len, err, errn)) return 0;
-    JsonDocument rd;
+    JsonDocument rd(psram_json());
     if (deserializeJson(rd, http_buf, len)) return 0;
     JsonObject obj = rd.as<JsonObject>();
     if (rd["result"].is<JsonObject>() && rd["result"]["response"].is<JsonObject>())
@@ -818,7 +948,7 @@ static int find_or_create_filament(const char *ip, uint16_t port, const CreateSp
     }
     int len = 0;
     if (!proxy(ip, port, "GET", "/v1/filament", nullptr, 10000, &len, err, errn)) return 0;
-    JsonDocument doc;
+    JsonDocument doc(psram_json());
     if (deserializeJson(doc, http_buf, len)) { cpy(err, errn, "Lista de filamentos invalida"); return 0; }
     JsonArray arr;
     unwrap_array(doc, arr);
@@ -829,7 +959,7 @@ static int find_or_create_filament(const char *ip, uint16_t port, const CreateSp
         if (vid == vendor_id && same_filament(f, r, color0, multi, nc > 1 ? dir : ""))
             return f["id"] | 0;
     }
-    JsonDocument body;
+    JsonDocument body(psram_json());
     body["name"] = r->name;
     body["material"] = r->material;
     body["vendor_id"] = vendor_id;
@@ -847,7 +977,7 @@ static int find_or_create_filament(const char *ip, uint16_t port, const CreateSp
     serializeJson(body, bj, sizeof(bj));
     len = 0;
     if (!proxy(ip, port, "POST", "/v1/filament", bj, 8000, &len, err, errn)) return 0;
-    JsonDocument rd;
+    JsonDocument rd(psram_json());
     if (deserializeJson(rd, http_buf, len)) return 0;
     JsonObject obj = rd.as<JsonObject>();
     if (rd["result"].is<JsonObject>() && rd["result"]["response"].is<JsonObject>())
@@ -860,7 +990,9 @@ static void do_create(const CreateSpoolReq *r) {
     char ip[16] = {0};
     uint16_t port = 7125;
     char err[160] = {0}, norm[24] = {0};
-    if (!spool_validate_uid(r->uid, norm, sizeof(norm), err, sizeof(err))) {
+    /* UID opcional: a tela associa a tag depois de criar o rolo. */
+    const bool with_uid = r->uid[0] != 0;
+    if (with_uid && !spool_validate_uid(r->uid, norm, sizeof(norm), err, sizeof(err))) {
         act_set(AR_ERR, err); return;
     }
     if (r->remaining_g > r->initial_g + 0.01f) {
@@ -868,9 +1000,11 @@ static void do_create(const CreateSpoolReq *r) {
     }
     if (r->initial_g < 0.01f) { act_set(AR_ERR, "Peso inicial invalido."); return; }
     if (!endpoint(ip, &port)) { act_set(AR_ERR, "U1 nao encontrada"); return; }
-    if (g_inv->status != INV_OK) do_refresh();
-    if (!unique_uid(norm, 0, err, sizeof(err))) { act_set(AR_ERR, err); return; }
-    if (!tag_field(ip, port, err, sizeof(err))) { act_set(AR_ERR, err); return; }
+    if (with_uid) {
+        if (g_inv->status != INV_OK) do_refresh();
+        if (!unique_uid(norm, 0, err, sizeof(err))) { act_set(AR_ERR, err); return; }
+        if (!tag_field(ip, port, err, sizeof(err))) { act_set(AR_ERR, err); return; }
+    }
 
     int fid = r->filament_id;
     if (fid <= 0) {
@@ -912,17 +1046,17 @@ static void do_create(const CreateSpoolReq *r) {
         if (fid <= 0) { act_set(AR_ERR, err[0] ? err : "Falha ao criar filamento"); return; }
     }
 
-    if (!unique_uid(norm, 0, err, sizeof(err))) { act_set(AR_ERR, err); return; }
+    if (with_uid && !unique_uid(norm, 0, err, sizeof(err))) { act_set(AR_ERR, err); return; }
 
     char quoted[32];
     snprintf(quoted, sizeof(quoted), "\"%s\"", norm);
-    JsonDocument body;
+    JsonDocument body(psram_json());
     body["filament_id"] = fid;
     body["initial_weight"] = r->initial_g;
     body["used_weight"] = r->initial_g - r->remaining_g;
     body["location"] = r->location;
     body["comment"] = r->comment;
-    body["extra"]["card_uids"] = quoted;
+    if (with_uid) body["extra"]["card_uids"] = quoted;
     char bj[768];
     serializeJson(body, bj, sizeof(bj));
     int len = 0;
@@ -936,7 +1070,7 @@ static void do_create(const CreateSpoolReq *r) {
         act_set(AR_ERR, err[0] ? err : "Cadastro sem resposta valida");
         return;
     }
-    if (!strstr(saved.card_uids, norm)) {
+    if (with_uid && !strstr(saved.card_uids, norm)) {
         act_set(AR_ERR, "Cadastro recebido sem NFC confirmado. Atualize o estoque antes de repetir.");
         return;
     }
@@ -945,7 +1079,8 @@ static void do_create(const CreateSpoolReq *r) {
     g_act.spool_id = saved.info.id;
     xSemaphoreGive(mutex);
     char h[140];
-    snprintf(h, sizeof(h), "Rolo #%d cadastrado (NFC %s)", saved.info.id, norm);
+    if (with_uid) snprintf(h, sizeof(h), "Rolo #%d cadastrado (NFC %s)", saved.info.id, norm);
+    else snprintf(h, sizeof(h), "Rolo #%d cadastrado. Associe a tag NFC.", saved.info.id);
     history_add(h);
     act_set(AR_OK, h, saved.info.id);
     do_refresh();
@@ -1046,7 +1181,7 @@ static void do_assign(int ch, int spool_id) {
         act_set(AR_ERR, ie[0] ? ie : "Rolo sem material ou cor.");
         return;
     }
-    JsonDocument body;
+    JsonDocument body(psram_json());
     body["channel"] = ch;
     body["info"] = serialized(info);
     body["message"] = "U1 Factory Display: associacao manual";
@@ -1086,8 +1221,8 @@ static bool nfc_spool_matches(const char *ip, uint16_t port, const char *uid, in
     int len = 0;
     if (!proxy(ip, port, "GET", "/v1/spool?allow_archived=true", nullptr, 8000, &len, err, errn))
         return false;
-    JsonDocument filter, doc;
-    JsonDocument fields;
+    JsonDocument filter(psram_json()), doc(psram_json());
+    JsonDocument fields(psram_json());
     fields["id"] = true;
     fields["archived"] = true;
     fields["extra"]["card_uids"] = true;
@@ -1197,7 +1332,7 @@ static void do_nfc_auto(int id, const char *request_uid) {
             act_set(AR_ERR, "Este rolo ja esta em outro alimentador."); return;
         }
     }
-    JsonDocument command;
+    JsonDocument command(psram_json());
     command["channel"] = ch;
     command["info"]["CARD_TYPE"] = "NTAG";
     JsonArray bytes = command["info"]["CARD_UID"].to<JsonArray>();
@@ -1256,7 +1391,7 @@ static void do_feed(int ch, bool load) {
     }
     char script[48];
     snprintf(script, sizeof(script), "AUTO_FEEDING EXTRUDER=%d %s=1", ch, load ? "LOAD" : "UNLOAD");
-    JsonDocument body;
+    JsonDocument body(psram_json());
     body["script"] = script;
     char bj[80];
     serializeJson(body, bj, sizeof(bj));
@@ -1289,7 +1424,7 @@ static void do_feed(int ch, bool load) {
 }
 
 static bool control_reply(int len) {
-    JsonDocument reply;
+    JsonDocument reply(psram_json());
     return len > 0 && !deserializeJson(reply, http_buf, len) &&
            !reply["result"].isNull() && reply["error"].isNull();
 }
@@ -1302,9 +1437,9 @@ static void control_list(const char *ip, uint16_t port) {
     memset(&files, 0, sizeof(files));
     /* Só o caminho: a resposta completa (size/modified/permissions) de centenas de
      * arquivos esgotava a RAM interna. */
-    JsonDocument filter;
+    JsonDocument filter(psram_json());
     filter["result"][0]["path"] = true;
-    JsonDocument doc;
+    JsonDocument doc(psram_json());
     if (!u1_get(ip, port, "/server/files/list?root=gcodes", 6000, &len, err, sizeof(err)) ||
         deserializeJson(doc, http_buf, len, DeserializationOption::Filter(filter)) ||
         !doc["result"].is<JsonArray>()) {
@@ -1334,7 +1469,7 @@ static void do_control() {
     const ControlOp op = control_op;
     if (op == ControlOp::Files) { control_list(ip, port); return; }
     int len = 0;
-    JsonDocument status;
+    JsonDocument status(psram_json());
     if (!u1_get(ip, port,
                 "/printer/objects/query?print_stats=state,filename&idle_timeout=state&webhooks=state&toolhead=homed_axes,position,axis_minimum,axis_maximum",
                 4000, &len, err, sizeof(err)) || deserializeJson(status, http_buf, len)) {
@@ -1352,7 +1487,7 @@ static void do_control() {
     if (strcmp(ready, "ready") || !*job) { act_set(AR_ERR, "U1 indisponivel."); return; }
 
     const char *route = "/printer/gcode/script";
-    JsonDocument body;
+    JsonDocument body(psram_json());
     char script[220]{}, payload[300]{};
     int wait_ms = 12000;
     if (op == ControlOp::Pause || op == ControlOp::Resume || op == ControlOp::Cancel) {
@@ -1465,6 +1600,8 @@ static void inv_task(void *) {
         xSemaphoreTake(mutex, portMAX_DELAY);
         k = pending;
         pending = ACT_NONE;
+        if (k == ACT_NONE && refresh_wanted) k = ACT_REFRESH;
+        if (k == ACT_REFRESH) refresh_wanted = false;
         if (k != ACT_NONE) {
             g_act.kind = k;
             g_act.state = AR_RUNNING;
@@ -1479,6 +1616,15 @@ static void inv_task(void *) {
 
 static void enqueue(ActKind k) {
     xSemaphoreTake(mutex, portMAX_DELAY);
+    /* Atualizar o estoque nunca se perde nem atropela outra ação: fica marcado
+     * e roda quando a fila esvaziar (antes, abrir o Armazém durante outra ação
+     * deixava a lista vazia com "Nenhum rolo com este filtro"). */
+    if (k == ACT_REFRESH && (pending != ACT_NONE || g_act.state == AR_RUNNING)) {
+        refresh_wanted = true;
+        xSemaphoreGive(mutex);
+        if (task_h) xTaskNotifyGive(task_h);
+        return;
+    }
     if ((g_act.kind == ACT_NFC_AUTO || g_act.kind == ACT_CONTROL) && g_act.state == AR_RUNNING) {
         xSemaphoreGive(mutex);
         return;
