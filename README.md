@@ -1,18 +1,41 @@
 # U1 Factory Display
 
-Pixel-art factory dashboard for the Snapmaker U1 on ESP32-S3 touch displays (Waveshare 7"). Live print status with a 4-head spool view and full Spoolman inventory via Moonraker. Companion to [Spool Factory](https://github.com/caiotmoraes/spool-factory).
+Painel touch da Snapmaker U1 no Waveshare ESP32-S3-Touch-LCD-7. Tema claro com widgets, status da impressão, inventário Spoolman via Moonraker e NFC (PN532). Par do app [Spool Factory](https://github.com/caiotmoraes/spool-factory) 2.0.0 (U1 Spool Spec v1).
+
+Touch dashboard for the Snapmaker U1 on the Waveshare ESP32-S3-Touch-LCD-7. Light widget theme, live print status, Spoolman inventory via Moonraker, and PN532 NFC. Companion to [Spool Factory](https://github.com/caiotmoraes/spool-factory) 2.0.0 (U1 Spool Spec v1).
 
 ## Monitor da fábrica — Snapmaker U1 no Waveshare ESP32-S3-Touch-LCD-7
 
 Firmware de um painel 800×480 (LCD RGB ST7262 + toque GT911, 8 MB de PSRAM)
-para acompanhar a Snapmaker U1 (Klipper / Moonraker). Visual inspirado no
-app [Spool Factory](https://github.com/caiotmoraes/spool-factory) e na máquina
-de estados do [klippyface](https://github.com/luke-kearney/klippyface).
+para acompanhar e controlar a Snapmaker U1 (Klipper / Moonraker). Visual em
+tema claro, com as mesmas 5 abas do app [Spool Factory](https://github.com/caiotmoraes/spool-factory):
+Início, Controle, Armazém, NFC e Ajustes. A máquina de estados do
+[klippyface](https://github.com/luke-kearney/klippyface) ainda serve de referência
+para o ciclo da impressão.
 
-Nesta versão a cena da **fábrica** está completa (estados, HUD em português,
-U1 centrada com cabeçote alinhado, rolo ativo via Spoolman). O **armazém de estoque** é só um
-placeholder: o mapeamento do app e a proposta de navegação touch estão
-documentados abaixo; **nenhuma escrita** no Spoolman ou na U1 foi implementada.
+## Ecossistema / Ecosystem
+
+A tela e o app Android formam um par: mesmos fluxos, textos (`spec/strings.json`, pt e en) e formato canônico de `card_uids` (`"A,B"` em hex maiúsculo). Versões compatíveis: **display v0.7.0 ↔ app 2.0.0**.
+
+- Este repositório: firmware do painel Waveshare ESP32-S3 (Wi-Fi + leitor PN532).
+- App complementar: [Spool Factory](https://github.com/caiotmoraes/spool-factory) — Android, NFC do celular, as mesmas 5 abas.
+
+The display and the Android app are a pair: same flows, copy (`spec/strings.json`, pt and en) and canonical `card_uids` format (`"A,B"`, uppercase hex). Compatible versions: **display v0.7.0 ↔ app 2.0.0**.
+
+- This repo: Waveshare ESP32-S3 panel firmware (Wi-Fi + PN532 reader).
+- Companion app: [Spool Factory](https://github.com/caiotmoraes/spool-factory) — Android, phone NFC, the same five tabs.
+
+```mermaid
+flowchart LR
+  U1["U1<br/>Klipper / Moonraker :7125<br/>+ proxy Spoolman + SpoolLink"]
+  D["U1 Factory Display v0.7.0<br/>ESP32-S3 · Wi-Fi · PN532 NFC"]
+  A["Spool Factory 2.0.0<br/>Android · NFC do celular"]
+  S["spec/ compartilhada<br/>strings.json<br/>card_uids formato A,B"]
+  D --> U1
+  A --> U1
+  D --- S
+  A --- S
+```
 
 ## Por que PlatformIO + Arduino + LVGL 8 (e não ESPHome)
 
