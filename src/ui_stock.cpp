@@ -658,7 +658,7 @@ static void open_nfc_for(int spool_id, const char *intro) {
 
     ui_make_btn(box, 8, 128, 190, 36, "Ler tag", COLOR_MINT, 0x081725,
                 [](lv_event_t *) { scan_nfc(nfc_status, NFC_LOOKUP, 0); }, nullptr);
-    nfc_link_btn = ui_make_btn(box, 210, 128, 240, 36, "Associar esta tag", COLOR_GOLD, 0x081725,
+    nfc_link_btn = ui_make_btn(box, 210, 128, 240, 36, S_NFC_LINK_THIS, COLOR_GOLD, 0x081725,
                                [](lv_event_t *) { ask_bind(nfc_selected_id(), nfc_last_uid); }, nullptr);
     lv_obj_add_flag(nfc_link_btn, LV_OBJ_FLAG_HIDDEN);
     nfc_register_btn = ui_make_btn(box, 462, 128, 238, 36, S_NFC_REGISTER, COLOR_ACCENT, COLOR_ON_ACCENT,

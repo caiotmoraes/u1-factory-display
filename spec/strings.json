@@ -863,6 +863,34 @@
   "pt": "Abrir Firmware Config",
   "en": "Open Firmware Config"
  },
+ "home.filaments": {
+  "pt": "Filamentos",
+  "en": "Filaments"
+ },
+ "home.target": {
+  "pt": "alvo {t} °C",
+  "en": "target {t} °C"
+ },
+ "home.fans_more": {
+  "pt": "Mais em Controle",
+  "en": "More in Control"
+ },
+ "ctl.feeders": {
+  "pt": "Alimentadores",
+  "en": "Feeders"
+ },
+ "nfc.link_this": {
+  "pt": "Associar esta tag",
+  "en": "Link this tag"
+ },
+ "nfc.link_pick": {
+  "pt": "Escolha o rolo que receberá a tag {uid}",
+  "en": "Choose the spool that will receive tag {uid}"
+ },
+ "set.auto_ip": {
+  "pt": "Automático · {ip}",
+  "en": "Automatic · {ip}"
+ },
  "log.title": {
   "pt": "Diário",
   "en": "Log"
