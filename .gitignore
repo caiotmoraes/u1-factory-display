@@ -4,6 +4,5 @@ include/secrets.h
 *.pyc
 __pycache__/
 scripts/node_modules/
-src/assets/asset_bins.h
 build/
 *.bin

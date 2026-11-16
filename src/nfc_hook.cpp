@@ -81,7 +81,7 @@ const char *write_record(int id, NfcResult &result) {
     const uint8_t empty_ndef[RECORD_BYTES]{0x03, 0x00, 0xFE, 0x00};
     const uint8_t empty_tlv[RECORD_BYTES]{0xFE};
     const int old_id = parse_record(existing);
-    if (old_id && old_id != id) return "Tag ja gravada para outro rolo.";
+    if (old_id && old_id != id) return "Tag já gravada para outro rolo.";
     if (!old_id && memcmp(existing, empty, sizeof(existing)) &&
         memcmp(existing, empty_ndef, sizeof(existing)) &&
         memcmp(existing, empty_tlv, sizeof(existing))) return "Tag contem outros dados.";
@@ -95,18 +95,18 @@ const char *write_record(int id, NfcResult &result) {
     record[9 + text_len] = 0xFE;
 
     // Keep the TLV empty until all trailing pages have been written.
-    if (!write_page(4, empty_ndef)) return "Falha de gravacao. Releia a tag.";
+    if (!write_page(4, empty_ndef)) return "Falha de gravação. Releia a tag.";
     for (int page = RECORD_BYTES / 4 - 1; page > 0; --page) {
-        if (!write_page(4 + page, record + page * 4)) return "Gravacao incompleta. Releia a tag.";
+        if (!write_page(4 + page, record + page * 4)) return "Gravação incompleta. Releia a tag.";
     }
-    if (!write_page(4, record)) return "Gravacao incompleta. Releia a tag.";
+    if (!write_page(4, record)) return "Gravação incompleta. Releia a tag.";
     char verified_uid[21]{};
     if (!select_tag(verified_uid) || strcmp(verified_uid, result.uid) ||
         !read_record(existing, false) || memcmp(record, existing, sizeof(record)))
-        return "Gravacao sem confirmacao. Releia a tag.";
+        return "Gravação sem confirmação. Releia a tag.";
     result.spool_id = id;
     result.ok = true;
-    return "Gravacao NDEF confirmada.";
+    return "Gravação NDEF confirmada.";
 }
 
 bool probe() {

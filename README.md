@@ -36,6 +36,16 @@ ESP32_IO_Expander 1.1.0, esp-lib-utils 0.2.0, LVGL 8.4.0, ArduinoJson 7.
 Macros da placa: `-DESP_PANEL_BOARD_DEFAULT_USE_SUPPORTED=1
 -DBOARD_WAVESHARE_ESP32_S3_TOUCH_LCD_7`. CDC nativo no boot ligado e UART0 reservada ao PN532. O CH343 continua sendo a porta de gravação.
 
+## O que esta versão faz (v0.6.0)
+
+- Tema claro "widgets": fundo #F2F0EC, cartões brancos (raio 16, borda suave, sem sombra), texto #2E3440, destaque #5B8DEF, em todas as telas, diálogos e toasts.
+- Barra lateral: Início, Controle, Armazém, NFC e Ajustes (Wi-Fi, impressora, Diário, Sobre).
+- Início: cartão de progresso (%, "Restam Xh Ymin", barra, arquivo, estado) com miniatura do G-code (metadata do Moonraker, PNG decodificado na PSRAM; ícone se não houver), filamentos T1–T4 como carretéis vetoriais, Bico/Mesa/Câmara com sparklines e chaves de exaustão/circulação (SET_FAN_SPEED).
+- Sensor da câmara descoberto em /printer/objects/list (temperature_sensor/heater_generic/temperature_fan com chamber/cavity/enclosure/camara/box).
+- Pixel art removida (cena, assets, geração de imagens); fontes Montserrat Latin-1 14/16/20/28/48 com acentos (scripts/gen_fonts.sh).
+- Heap do LVGL na PSRAM (src/lv_mem_psram.c), preferindo PSRAM e caindo para a interna; o Início só redesenha o que mudou.
+- Simulador de host (tools/sim/build.sh) gera os previews 800×480.
+
 ## O que esta versão faz (v0.4.3)
 
 v0.4.3 (em cima da v0.4.2):

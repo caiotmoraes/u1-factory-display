@@ -17,6 +17,7 @@
 #include <Preferences.h>
 #include <ArduinoJson.h>
 #include "psram_json.h"
+#include "thumb.h"
 #include <string.h>
 #include <strings.h>
 #include <stdio.h>
@@ -26,6 +27,11 @@ static SemaphoreHandle_t mutex;
 static PrinterSnapshot g_snap;
 static uint32_t g_seq = 1;
 static bool force_discover = false;
+/* Sensor da câmara (nome Klipper, ex.: "temperature_sensor cavity") e o mesmo
+ * nome com %20 para a query. Vazio = U1 sem sensor reconhecido. */
+static char chamber_obj[64];
+static char chamber_q[80];
+static bool chamber_probed = false;
 
 static const uint16_t kPort =
 #ifdef MOONRAKER_PORT
@@ -249,6 +255,12 @@ static bool parse_objects(const String &body, PrinterSnapshot &s) {
         s.fan_circulation = fan("fan_generic circulation_fan");
         s.fan_cavity = fan("fan_generic cavity_fan");
     }
+    s.chamber_c = -1000;
+    if (chamber_obj[0] && st[chamber_obj].is<JsonObject>()) {
+        JsonVariant t = st[chamber_obj]["temperature"];
+        if (t.is<float>() || t.is<int>()) s.chamber_c = t.as<float>();
+        s.chamber_target_c = st[chamber_obj]["target"] | 0.0f;
+    }
     if (st["toolhead"].is<JsonObject>()) {
         const char *ex = st["toolhead"]["extruder"] | "extruder";
         s.active_extruder = hud_parse_extruder_name(ex);
@@ -332,12 +344,46 @@ static void parse_spool(const String &body, SpoolInfo &sp, int expected_id) {
     sp.low = (sp.remaining_g >= 0 && sp.remaining_g < SPOOL_LOW_GRAMS);
 }
 
+/* Uma vez por descoberta: procura um sensor de câmara na lista de objetos. */
+static void probe_chamber(const PrinterSnapshot &s) {
+    chamber_probed = true;
+    chamber_obj[0] = chamber_q[0] = 0;
+    char url[96];
+    snprintf(url, sizeof(url), "http://%s:%u/printer/objects/list", s.printer_ip, s.printer_port);
+    String body;
+    if (!http_get(url, body, 2500)) { chamber_probed = false; return; }
+    JsonDocument doc(psram_json());
+    if (deserializeJson(doc, body)) return;
+    JsonArray objs = root_of(doc)["objects"];
+    static const char *const kinds[] = {"temperature_sensor ", "heater_generic ", "temperature_fan "};
+    static const char *const hints[] = {"chamber", "cavity", "enclosure", "camara", "box"};
+    for (JsonVariant v : objs) {
+        const char *name = v | "";
+        bool kind = false;
+        for (const char *k : kinds) kind |= strncmp(name, k, strlen(k)) == 0;
+        if (!kind) continue;
+        bool hint = false;
+        for (const char *h : hints) hint |= strcasestr(name, h) != nullptr;
+        if (!hint || strlen(name) >= sizeof(chamber_obj)) continue;
+        cpy(chamber_obj, sizeof(chamber_obj), name);
+        size_t o = 0;
+        for (const char *p = name; *p && o + 4 < sizeof(chamber_q); ++p) {
+            if (*p == ' ') { memcpy(chamber_q + o, "%20", 3); o += 3; }
+            else chamber_q[o++] = *p;
+        }
+        chamber_q[o] = 0;
+        break;
+    }
+    Serial.printf("[moonraker] sensor da camara: %s\n", chamber_obj[0] ? chamber_obj : "(nenhum)");
+}
+
 static bool poll_once(PrinterSnapshot &s) {
-    char url[512];
+    char url[640];
+    if (!chamber_probed) probe_chamber(s);
     String body;
     snprintf(url, sizeof(url),
-             "http://%s:%u/printer/objects/query?print_stats&virtual_sdcard&display_status&extruder&extruder1&extruder2&extruder3&heater_bed&idle_timeout&webhooks&filament_feed%%20left&filament_feed%%20right&filament_detect&print_task_config&toolhead&fan&fan_generic%%20exhaust_fan&fan_generic%%20circulation_fan&fan_generic%%20cavity_fan",
-             s.printer_ip, s.printer_port);
+             "http://%s:%u/printer/objects/query?print_stats&virtual_sdcard&display_status&extruder&extruder1&extruder2&extruder3&heater_bed&idle_timeout&webhooks&filament_feed%%20left&filament_feed%%20right&filament_detect&print_task_config&toolhead&fan&fan_generic%%20exhaust_fan&fan_generic%%20circulation_fan&fan_generic%%20cavity_fan%s%s",
+             s.printer_ip, s.printer_port, chamber_q[0] ? "&" : "", chamber_q);
     if (!http_get(url, body, 2500)) {
         /* fallback se a U1 rejeitar objetos extras */
         snprintf(url, sizeof(url),
@@ -468,6 +514,7 @@ static void task(void *) {
                 continue;
             }
             fails = 0;
+            chamber_probed = false;
         }
 
         if (poll_once(s)) {
@@ -475,6 +522,7 @@ static void task(void *) {
             s.moonraker_ok = true;
             if (s.state != PRINTER_OFFLINE) s.status_msg[0] = 0;
             publish(s);
+            thumb_update(s.printer_ip, s.printer_port, s.filename);
         } else {
             fails++;
             Serial.printf("[moonraker] falha de poll (%d) em %s\n", fails, s.printer_ip);

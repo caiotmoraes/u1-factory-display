@@ -68,6 +68,9 @@ typedef struct {
     float fan_exhaust;        /* fan_generic exhaust_fan */
     float fan_circulation;    /* fan_generic circulation_fan */
     float fan_cavity;         /* fan_generic cavity_fan */
+    /* Câmara: sensor achado em /printer/objects/list; -1000 = sem sensor. */
+    float chamber_c;
+    float chamber_target_c;
     float filament_used;
     char print_stats[16];
 

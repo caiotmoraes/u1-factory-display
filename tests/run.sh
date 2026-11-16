@@ -30,7 +30,4 @@ echo
 echo "== protocolo Moonraker / Spoolman (FakeMoonraker) =="
 python3 "$ROOT/scripts/test_protocol.py"
 echo
-echo "== pipeline de pixels (TRUE_COLOR_ALPHA / recolor) =="
-python3 "$ROOT/tests/test_pixels.py"
-echo
 echo "Todos os testes de host passaram."

@@ -40,13 +40,16 @@ static lv_obj_t *make_ta(lv_obj_t *parent, int x, int y, int w, int h, const cha
     lv_textarea_set_one_line(ta, oneline);
     lv_textarea_set_max_length(ta, maxlen);
     lv_textarea_set_placeholder_text(ta, ph ? ph : "");
-    lv_obj_set_style_text_font(ta, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_bg_color(ta, ui_C(0x0A1630), 0);
-    lv_obj_set_style_text_color(ta, ui_C(COLOR_CREAM), 0);
-    lv_obj_set_style_border_color(ta, ui_C(COLOR_MINT), 0);
+    lv_obj_set_style_text_font(ta, &font_ui_14, 0);
+    lv_obj_set_style_bg_color(ta, ui_C(COLOR_SURFACE2), 0);
+    lv_obj_set_style_bg_opa(ta, LV_OPA_COVER, 0);
+    lv_obj_set_style_text_color(ta, ui_C(COLOR_TEXT), 0);
+    lv_obj_set_style_border_color(ta, ui_C(COLOR_LINE), 0);
+    lv_obj_set_style_border_color(ta, ui_C(COLOR_ACCENT), LV_STATE_FOCUSED);
     lv_obj_set_style_border_width(ta, 1, 0);
-    lv_obj_set_style_radius(ta, 0, 0);
-    lv_obj_set_style_pad_all(ta, 4, 0);
+    lv_obj_set_style_radius(ta, 10, 0);
+    lv_obj_set_style_pad_hor(ta, 10, 0);
+    lv_obj_set_style_pad_ver(ta, 6, 0);
     lv_obj_add_event_cb(ta, ta_focus, LV_EVENT_ALL, nullptr);
     return ta;
 }
@@ -54,26 +57,30 @@ static lv_obj_t *make_ta(lv_obj_t *parent, int x, int y, int w, int h, const cha
 static lv_obj_t *make_dd(lv_obj_t *parent, int x, int y, int w, const char *opts) {
     lv_obj_t *d = lv_dropdown_create(parent);
     lv_obj_set_pos(d, x, y);
-    lv_obj_set_size(d, w, 32);
+    lv_obj_set_size(d, w, 36);
     lv_dropdown_set_options(d, opts ? opts : "Todos");
-    lv_obj_set_style_text_font(d, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_bg_color(d, ui_C(COLOR_CARD), 0);
-    lv_obj_set_style_text_color(d, ui_C(COLOR_CREAM), 0);
-    lv_obj_set_style_border_color(d, ui_C(COLOR_MINT), 0);
+    lv_obj_set_style_text_font(d, &font_ui_14, 0);
+    lv_obj_set_style_bg_color(d, ui_C(COLOR_SURFACE2), 0);
+    lv_obj_set_style_text_color(d, ui_C(COLOR_TEXT), 0);
+    lv_obj_set_style_border_color(d, ui_C(COLOR_LINE), 0);
     lv_obj_set_style_border_width(d, 1, 0);
-    lv_obj_set_style_radius(d, 0, 0);
+    lv_obj_set_style_radius(d, 10, 0);
+    lv_obj_set_style_pad_ver(d, 9, 0);
+    lv_obj_set_style_shadow_width(d, 0, 0);
     return d;
 }
 
 static lv_obj_t *chip(lv_obj_t *parent, int x, int y, int w, const char *txt, lv_event_cb_t cb, bool *state) {
-    lv_obj_t *b = ui_make_btn(parent, x, y, w, 28, txt, COLOR_CARD, COLOR_MINT, cb, state);
+    lv_obj_t *b = ui_make_btn(parent, x, y, w, 32, txt, COLOR_CARD, COLOR_MINT, cb, state);
+    lv_obj_set_style_radius(b, 16, 0);
     return b;
 }
 
 static void set_chip(lv_obj_t *b, bool on) {
-    lv_obj_set_style_bg_color(b, ui_C(on ? COLOR_MINT : COLOR_CARD), 0);
+    lv_obj_set_style_bg_color(b, ui_C(on ? COLOR_ACCENT : COLOR_SURFACE2), 0);
+    lv_obj_set_style_border_width(b, on ? 0 : 1, 0);
     lv_obj_t *l = lv_obj_get_child(b, 0);
-    if (l) lv_obj_set_style_text_color(l, ui_C(on ? 0x081725 : COLOR_MINT), 0);
+    if (l) lv_obj_set_style_text_color(l, ui_C(on ? 0xFFFFFF : COLOR_ACCENT), 0);
 }
 
 /* ---------- lista ---------- */
@@ -96,39 +103,39 @@ static void fill_list(void) {
     filt_n = stock_apply_filter(ui_inv->items, ui_inv->count, &ui_filter, filt_idx, WAREHOUSE_MAX);
     if (ui_inv->status == INV_LOADING || ui_inv->status == INV_IDLE) {
         lv_obj_t *l = lv_label_create(wh_list);
-        ui_style_label(l, &font_press_start_12, COLOR_MUTED);
+        ui_style_label(l, &font_ui_14, COLOR_MUTED);
         lv_label_set_text(l, "Carregando estoque...");
         lv_obj_set_pos(l, 12, 16);
         return;
     }
     if (ui_inv->status == INV_ERROR || ui_inv->status == INV_OFFLINE) {
         lv_obj_t *l = lv_label_create(wh_list);
-        ui_style_label(l, &lv_font_montserrat_14, COLOR_ALERT);
+        ui_style_label(l, &font_ui_14, COLOR_ALERT);
         lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
-        lv_obj_set_width(l, 740);
+        lv_obj_set_width(l, 660);
         lv_obj_set_pos(l, 12, 16);
         char msg[200];
-        snprintf(msg, sizeof(msg), "%s\nToque ATUALIZA para tentar de novo.",
+        snprintf(msg, sizeof(msg), "%s\nToque Atualizar para tentar de novo.",
                  ui_inv->status == INV_OFFLINE
-                     ? (ui_inv->error_msg[0] ? ui_inv->error_msg : "Impressora offline / sem conexao")
+                     ? (ui_inv->error_msg[0] ? ui_inv->error_msg : "Impressora offline / sem conexão")
                      : (ui_inv->error_msg[0] ? ui_inv->error_msg : "Falha ao carregar o estoque."));
         lv_label_set_text(l, msg);
         return;
     }
     if (filt_n == 0) {
         lv_obj_t *l = lv_label_create(wh_list);
-        ui_style_label(l, &font_press_start_12, COLOR_MUTED);
+        ui_style_label(l, &font_ui_14, COLOR_MUTED);
         int visible = 0;
         for (int i = 0; i < ui_inv->count; i++) visible += !ui_inv->items[i].archived;
         lv_label_set_text(l, ui_inv->count == 0 ? "Nenhum rolo cadastrado no Spoolman." :
                              stock_filter_is_default(&ui_filter) && visible == 0
-                                 ? "So ha rolos arquivados. Toque ARQUIVADOS."
+                                 ? "Só há rolos arquivados. Toque Arquivados."
                                  : "Nenhum rolo com este filtro.");
         lv_obj_set_pos(l, 12, 16);
         return;
     }
-    const int cw = ui_compact ? 760 : 376;
-    const int ch = ui_compact ? 44 : 96;
+    const int cw = ui_compact ? 680 : 336;
+    const int ch = ui_compact ? 46 : 96;
     const int gap = 8;
     const int cols = ui_compact ? 1 : 2;
     for (int i = 0; i < filt_n; i++) {
@@ -141,12 +148,15 @@ static void fill_list(void) {
         lv_obj_set_pos(card, x, y);
         lv_obj_set_size(card, cw, ch);
         bool active = (s->info.id == ui_inv->active_id && s->info.id > 0);
-        lv_obj_set_style_bg_color(card, ui_C(COLOR_CARD), 0);
-        lv_obj_set_style_bg_opa(card, s->archived ? LV_OPA_50 : LV_OPA_90, 0);
-        lv_obj_set_style_border_color(card, ui_C(active ? COLOR_GOLD : COLOR_MINT), 0);
-        lv_obj_set_style_border_width(card, active ? 3 : 2, 0);
-        lv_obj_set_style_radius(card, 0, 0);
-        lv_obj_set_style_pad_all(card, 6, 0);
+        lv_obj_set_style_bg_color(card, ui_C(COLOR_SURFACE), 0);
+        lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
+        lv_obj_set_style_opa(card, s->archived ? LV_OPA_60 : LV_OPA_COVER, 0);
+        lv_obj_set_style_border_color(card, ui_C(active ? COLOR_ACCENT : COLOR_LINE), 0);
+        lv_obj_set_style_border_width(card, active ? 2 : 1, 0);
+        lv_obj_set_style_radius(card, 14, 0);
+        lv_obj_set_style_shadow_width(card, 0, 0);
+        lv_obj_set_style_pad_all(card, 8, 0);
+        lv_obj_set_style_bg_color(card, ui_C(COLOR_ACCENT_BG), LV_STATE_PRESSED);
         lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_add_event_cb(card, card_click, LV_EVENT_CLICKED, (void *)(intptr_t)s->info.id);
 
@@ -155,15 +165,15 @@ static void fill_list(void) {
         lv_obj_set_size(sw, ui_compact ? 20 : 28, ui_compact ? 20 : 28);
         lv_obj_set_style_bg_color(sw, ui_C(ui_parse_hex(s->info.color_hex)), 0);
         lv_obj_set_style_border_width(sw, 1, 0);
-        lv_obj_set_style_border_color(sw, ui_C(COLOR_CREAM), 0);
-        lv_obj_set_style_radius(sw, 0, 0);
+        lv_obj_set_style_border_color(sw, ui_C(0xC9CDD4), 0);
+        lv_obj_set_style_radius(sw, LV_RADIUS_CIRCLE, 0);
         lv_obj_set_style_pad_all(sw, 0, 0);
         lv_obj_clear_flag(sw, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
 
         char line[160];
         if (ui_compact) {
             if (s->info.remaining_g >= 0)
-                snprintf(line, sizeof(line), "#%d  %s %s  %s   %.0fg%s",
+                snprintf(line, sizeof(line), "#%d  %s %s  %s   %.0f g%s",
                          s->info.id, s->info.vendor, s->info.material,
                          s->info.name, (double)s->info.remaining_g,
                          active ? "  EM USO" : (s->archived ? "  arq." : ""));
@@ -172,26 +182,26 @@ static void fill_list(void) {
                          s->info.id, s->info.vendor, s->info.material, s->info.name,
                          active ? "  EM USO" : "");
             lv_obj_t *lb = lv_label_create(card);
-            ui_style_label(lb, &lv_font_montserrat_14, s->info.low ? COLOR_ALERT : COLOR_CREAM);
+            ui_style_label(lb, &font_ui_14, s->info.low ? COLOR_ALERT : COLOR_CREAM);
             lv_label_set_long_mode(lb, LV_LABEL_LONG_DOT);
             lv_obj_set_width(lb, cw - 50);
             lv_obj_set_pos(lb, 30, 10);
             lv_label_set_text(lb, line);
         } else {
             lv_obj_t *t1 = lv_label_create(card);
-            ui_style_label(t1, &font_press_start_12, COLOR_MINT);
+            ui_style_label(t1, &font_ui_16, COLOR_TEXT);
             snprintf(line, sizeof(line), "%s  %s", s->info.material[0] ? s->info.material : "?",
                      s->info.vendor);
             lv_label_set_text(t1, line);
             lv_obj_set_pos(t1, 40, 4);
             lv_obj_t *t2 = lv_label_create(card);
-            ui_style_label(t2, &lv_font_montserrat_14, COLOR_CREAM);
+            ui_style_label(t2, &font_ui_14, COLOR_TEXT2);
             lv_label_set_long_mode(t2, LV_LABEL_LONG_DOT);
             lv_obj_set_width(t2, cw - 56);
-            lv_obj_set_pos(t2, 40, 26);
+            lv_obj_set_pos(t2, 40, 28);
             lv_label_set_text(t2, s->info.name[0] ? s->info.name : "--");
             lv_obj_t *t3 = lv_label_create(card);
-            ui_style_label(t3, &font_press_start_12, s->info.low ? COLOR_ALERT : COLOR_MUTED);
+            ui_style_label(t3, &font_ui_14, s->info.low ? COLOR_ALERT : COLOR_MUTED);
             if (s->info.remaining_g >= 0)
                 snprintf(line, sizeof(line), "#%d   %.0f g", s->info.id, (double)s->info.remaining_g);
             else
@@ -200,28 +210,28 @@ static void fill_list(void) {
             lv_obj_set_pos(t3, 40, 58);
             if (s->location[0]) {
                 lv_obj_t *t4 = lv_label_create(card);
-                ui_style_label(t4, &lv_font_montserrat_14, COLOR_MUTED);
+                ui_style_label(t4, &font_ui_14, COLOR_MUTED);
                 lv_label_set_long_mode(t4, LV_LABEL_LONG_DOT);
-                lv_obj_set_width(t4, 140);
-                lv_obj_set_pos(t4, cw - 160, 58);
+                lv_obj_set_size(t4, 150, 18);
+                lv_obj_set_pos(t4, cw - 166, 58);
                 lv_label_set_text(t4, s->location);
             }
             if (active) {
                 lv_obj_t *badge = lv_label_create(card);
-                ui_style_label(badge, &font_press_start_12, COLOR_GOLD);
+                ui_style_label(badge, &font_ui_14, COLOR_ACCENT);
                 lv_label_set_text(badge, "EM USO");
-                lv_obj_set_pos(badge, cw - 90, 6);
+                lv_obj_set_pos(badge, cw - 82, 4);
             } else if (s->archived) {
                 lv_obj_t *badge = lv_label_create(card);
-                ui_style_label(badge, &font_press_start_12, COLOR_MUTED);
-                lv_label_set_text(badge, "ARQ.");
-                lv_obj_set_pos(badge, cw - 70, 6);
+                ui_style_label(badge, &font_ui_14, COLOR_MUTED);
+                lv_label_set_text(badge, "arquivado");
+                lv_obj_set_pos(badge, cw - 88, 4);
             }
         }
     }
     StockSummary sm = stock_summary(ui_inv->items, ui_inv->count);
     char sum[160];
-    snprintf(sum, sizeof(sum), "%d ativos  |  %.0f g  |  %d <=200 g  |  %d arquivados  |  mostrando %d",
+    snprintf(sum, sizeof(sum), "%d ativos · %.0f g · %d ≤200 g · %d arq. · %d na lista",
              sm.active, (double)sm.known_weight_g, sm.low200, sm.archived, filt_n);
     if (wh_summary) lv_label_set_text(wh_summary, sum);
 }
@@ -315,7 +325,7 @@ static void on_chip_clear(lv_event_t *e) {
 
 static void on_refresh(lv_event_t *e) {
     lv_event_stop_bubbling(e);
-    if (inventory_busy()) { ui_toast("Aguarde a acao em curso.", false); return; }
+    if (inventory_busy()) { ui_toast("Aguarde a ação em curso.", false); return; }
     if (wh_status) lv_label_set_text(wh_status, "Atualizando...");
     inventory_request_refresh();
 }
@@ -413,7 +423,7 @@ static void cancel_nfc_on_delete(lv_event_t *e) {
 
 static bool scan_nfc(lv_obj_t *target, NfcMode mode, int spool_id) {
     if (nfc_auto_active) {
-        ui_toast("Aguarde a associacao ou feche o menu para cancelar.", false);
+        ui_toast("Aguarde a associação ou feche o menu para cancelar.", false);
         return false;
     }
     if (!nfc_request(mode == NFC_WRITE ? spool_id : 0)) {
@@ -426,7 +436,7 @@ static bool scan_nfc(lv_obj_t *target, NfcMode mode, int spool_id) {
     lv_obj_add_event_cb(target, cancel_nfc_on_delete, LV_EVENT_DELETE, nullptr);
     if (nfc_link_btn) lv_obj_add_flag(nfc_link_btn, LV_OBJ_FLAG_HIDDEN);
     nfc_set_status(mode == NFC_WRITE ? "Aproxime uma NTAG vazia e mantenha no leitor..."
-                                     : "Aproxime a tag do leitor e mantenha ate o fim...");
+                                     : "Aproxime a tag do leitor e mantenha até o fim...");
     return true;
 }
 
@@ -449,20 +459,20 @@ static void ask_bind(int id, const char *raw_uid) {
     char norm[24] = {0}, err[80] = {0};
     if (id <= 0) { nfc_set_status("Escolha um rolo na lista."); return; }
     if (!spool_validate_uid(raw_uid, norm, sizeof(norm), err, sizeof(err))) {
-        nfc_set_status(err[0] ? err : "UID invalido.");
+        nfc_set_status(err[0] ? err : "UID inválido.");
         return;
     }
     int count = 0;
     const WarehouseSpool *owner = spool_by_uid(norm, &count);
     char msg[200];
     if (owner && owner->info.id == id) {
-        snprintf(msg, sizeof(msg), "A tag %s ja esta associada ao rolo #%d.", norm, id);
+        snprintf(msg, sizeof(msg), "A tag %s já está associada ao rolo #%d.", norm, id);
         nfc_set_status(msg);
         if (!nfc_status) ui_toast(msg, false);
         return;
     }
     if (owner) {
-        snprintf(msg, sizeof(msg), "Tag %s ja associada ao rolo #%d. Nenhuma tag foi transferida.",
+        snprintf(msg, sizeof(msg), "Tag %s já associada ao rolo #%d. Nenhuma tag foi transferida.",
                  norm, owner->info.id);
         nfc_set_status(msg);
         if (!nfc_status) ui_toast(msg, true);
@@ -474,9 +484,9 @@ static void ask_bind(int id, const char *raw_uid) {
     char line[96];
     if (s) spool_line(s, line, sizeof(line));
     else snprintf(line, sizeof(line), "#%d", id);
-    snprintf(msg, sizeof(msg), "Associar a tag %s ao rolo %s? Os UIDs ja gravados no rolo serao mantidos.",
+    snprintf(msg, sizeof(msg), "Associar a tag %s ao rolo %s? Os UIDs já gravados no rolo serão mantidos.",
              norm, line);
-    ui_confirm("ASSOCIAR TAG", msg, do_bind_confirmed, nullptr);
+    ui_confirm("Associar tag", msg, do_bind_confirmed, nullptr);
 }
 
 static void show_lookup(const NfcResult &r) {
@@ -489,11 +499,11 @@ static void show_lookup(const NfcResult &r) {
     nfc_matched_spool = 0;
     if (nfc_auto_button) lv_obj_add_state(nfc_auto_button, LV_STATE_DISABLED);
     if (!ui_inv || ui_inv->status != INV_OK) {
-        snprintf(text, sizeof(text), "UID: %s\nEstoque nao carregado (%s). Toque ATUALIZA no Armazem.",
+        snprintf(text, sizeof(text), "UID: %s\nEstoque não carregado (%s). Toque Atualizar no Armazém.",
                  norm, ui_inv && ui_inv->error_msg[0] ? ui_inv->error_msg : "sem dados");
     } else if (!s) {
-        snprintf(text, sizeof(text), "UID lido: %s\nTag nao associada a nenhum rolo.\n"
-                 "Escolha o rolo abaixo e toque ASSOCIAR ESTA TAG.", norm);
+        snprintf(text, sizeof(text), "UID lido: %s\nTag não associada a nenhum rolo.\n"
+                 "Escolha o rolo abaixo e toque Associar esta tag.", norm);
         if (nfc_link_btn) lv_obj_clear_flag(nfc_link_btn, LV_OBJ_FLAG_HIDDEN);
     } else {
         char line[96], rem[24];
@@ -510,7 +520,7 @@ static void show_lookup(const NfcResult &r) {
         }
         if (count > 1) {
             size_t l = strlen(text);
-            snprintf(text + l, sizeof(text) - l, "\nAtencao: UID repetido em %d rolos.", count);
+            snprintf(text + l, sizeof(text) - l, "\nAtenção: UID repetido em %d rolos.", count);
         }
         if (!s->archived && count == 1 && r.ntag) {
             nfc_matched_spool = s->info.id;
@@ -554,7 +564,7 @@ static void nfc_tick() {
         new_spool_wait = false;
         if (ui_act.state == AR_OK && ui_act.spool_id > 0) {
             char intro[120];
-            snprintf(intro, sizeof(intro), "Rolo #%d cadastrado.\nAproxime a tag e toque LER E ASSOCIAR.",
+            snprintf(intro, sizeof(intro), "Rolo #%d cadastrado.\nAproxime a tag e toque Ler e associar.",
                      ui_act.spool_id);
             open_nfc_for(ui_act.spool_id, intro);
         }
@@ -605,40 +615,40 @@ static void open_nfc_for(int spool_id, const char *intro) {
         nfc_auto_active = false;
         nfc_status = nfc_dd = nfc_adv = nfc_link_btn = nfc_auto_button = nfc_uid_ta = nullptr;
     }, LV_EVENT_DELETE, nullptr);
-    ui_style_label(nfc_status, &lv_font_montserrat_14, COLOR_CREAM);
+    ui_style_label(nfc_status, &font_ui_14, COLOR_CREAM);
     lv_label_set_long_mode(nfc_status, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(nfc_status, 690);
     lv_obj_set_pos(nfc_status, 8, 34);
     lv_label_set_text(nfc_status, intro ? intro :
-                      nfc_present() ? "PN532 conectado. Toque LER TAG ou escolha um rolo para associar."
+                      nfc_present() ? "PN532 conectado. Toque Ler tag ou escolha um rolo para associar."
                                     : "Aguardando o PN532 (UART2).");
 
-    ui_make_btn(box, 8, 128, 190, 36, "LER TAG", COLOR_MINT, 0x081725,
+    ui_make_btn(box, 8, 128, 190, 36, "Ler tag", COLOR_MINT, 0x081725,
                 [](lv_event_t *) { scan_nfc(nfc_status, NFC_LOOKUP, 0); }, nullptr);
-    nfc_link_btn = ui_make_btn(box, 210, 128, 300, 36, "ASSOCIAR ESTA TAG", COLOR_GOLD, 0x081725,
+    nfc_link_btn = ui_make_btn(box, 210, 128, 300, 36, "Associar esta tag", COLOR_GOLD, 0x081725,
                                [](lv_event_t *) { ask_bind(nfc_selected_id(), nfc_last_uid); }, nullptr);
     lv_obj_add_flag(nfc_link_btn, LV_OBJ_FLAG_HIDDEN);
 
     lv_obj_t *l = lv_label_create(box);
-    ui_style_label(l, &lv_font_montserrat_14, COLOR_MUTED);
+    ui_style_label(l, &font_ui_14, COLOR_MUTED);
     lv_label_set_text(l, "Rolo do Spoolman:");
     lv_obj_set_pos(l, 8, 176);
     nfc_dd = make_dd(box, 8, 196, 470, "");
     build_spool_options(spool_id);
     if (ui_inv && ui_inv->status != INV_OK && ui_inv->status != INV_LOADING) inventory_request_refresh();
-    ui_make_btn(box, 490, 196, 210, 36, "LER E ASSOCIAR", COLOR_CARD, COLOR_MINT,
+    ui_make_btn(box, 490, 196, 210, 36, "Ler e associar", COLOR_CARD, COLOR_MINT,
                 [](lv_event_t *) {
                     const int id = nfc_selected_id();
                     if (id <= 0) { nfc_set_status("Escolha um rolo na lista."); return; }
                     scan_nfc(nfc_status, NFC_BIND, id);
                 }, nullptr);
 
-    ui_make_btn(box, 8, 370, 170, 36, "AVANCADO", COLOR_CARD, COLOR_MUTED, [](lv_event_t *) {
+    ui_make_btn(box, 8, 370, 170, 36, "Avançado", COLOR_CARD, COLOR_MUTED, [](lv_event_t *) {
         if (!nfc_adv) return;
         if (lv_obj_has_flag(nfc_adv, LV_OBJ_FLAG_HIDDEN)) lv_obj_clear_flag(nfc_adv, LV_OBJ_FLAG_HIDDEN);
         else lv_obj_add_flag(nfc_adv, LV_OBJ_FLAG_HIDDEN);
     }, nullptr);
-    ui_make_btn(box, 530, 370, 170, 36, "FECHAR", COLOR_CARD, COLOR_MUTED,
+    ui_make_btn(box, 530, 370, 170, 36, "Fechar", COLOR_CARD, COLOR_MUTED,
                 [](lv_event_t *) { ui_close_overlays(); }, nullptr);
 
     /* Opções avançadas, escondidas por padrão. */
@@ -651,15 +661,15 @@ static void open_nfc_for(int spool_id, const char *intro) {
     lv_obj_clear_flag(nfc_adv, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(nfc_adv, LV_OBJ_FLAG_HIDDEN);
     nfc_uid_ta = make_ta(nfc_adv, 8, 6, 250, 36, "UID manual (AABBCCDD)", 22, true);
-    ui_make_btn(nfc_adv, 268, 6, 210, 36, "ASSOCIAR UID", COLOR_CARD, COLOR_MINT, [](lv_event_t *) {
+    ui_make_btn(nfc_adv, 268, 6, 210, 36, "Associar UID", COLOR_CARD, COLOR_MINT, [](lv_event_t *) {
         if (nfc_uid_ta) ask_bind(nfc_selected_id(), lv_textarea_get_text(nfc_uid_ta));
     }, nullptr);
-    ui_make_btn(nfc_adv, 8, 56, 250, 36, "GRAVAR NDEF NA TAG", COLOR_CARD, COLOR_MINT, [](lv_event_t *) {
+    ui_make_btn(nfc_adv, 8, 56, 250, 36, "Gravar NDEF na tag", COLOR_CARD, COLOR_MINT, [](lv_event_t *) {
         const int id = nfc_selected_id();
         if (id <= 0) { nfc_set_status("Escolha um rolo na lista."); return; }
         scan_nfc(nfc_status, NFC_WRITE, id);
     }, nullptr);
-    nfc_auto_button = ui_make_btn(nfc_adv, 268, 56, 300, 36, "INSERIR NO ALIMENTADOR",
+    nfc_auto_button = ui_make_btn(nfc_adv, 268, 56, 300, 36, "Inserir no alimentador",
                                   COLOR_CARD, COLOR_MINT, [](lv_event_t *) {
         if (!inventory_request_nfc_auto(nfc_matched_spool, nfc_matched_uid)) {
             nfc_set_status("Estoque ocupado. Tente novamente.");
@@ -674,6 +684,11 @@ static void open_nfc_for(int spool_id, const char *intro) {
 }
 
 static void open_nfc(lv_event_t *) { open_nfc_for(0, nullptr); }
+
+void ui_nfc_open(bool read) {
+    open_nfc_for(0, nullptr);
+    if (read) scan_nfc(nfc_status, NFC_LOOKUP, 0);
+}
 
 void ui_warehouse_tick(void) {
     nfc_tick();
@@ -704,65 +719,56 @@ void ui_warehouse_tick(void) {
     }
 }
 
-void ui_warehouse_build(void) {
-    lv_obj_t *scr = scr_warehouse;
-    lv_obj_t *t = lv_label_create(scr);
-    ui_style_label(t, &font_press_start_16, COLOR_MINT);
-    lv_label_set_text(t, "ARMAZEM DE ROLOS");
-    lv_obj_set_pos(t, 12, 48);
-
-    ui_make_btn(scr, 12, 8, 100, 28, "ATUALIZA", COLOR_CARD, COLOR_MINT, on_refresh, nullptr);
-    /* ATUALIZA is under tabs? tabs are at y=8 right side. Left is free. Move: */
-    /* actually tabs occupy 392+. x=12 is fine. But I already put ATUALIZA at 12,8 overlapping title.
-       Put buttons at y=48 right of title. Recreate - I'll set pos after: */
-    /* The two buttons were created at 12,8 — delete approach: just also create at right places.
-       Let me not create at 12,8. I'll leave and add properly: */
-    ui_make_btn(scr, 420, 46, 70, 28, "NOVO", COLOR_MINT, 0x081725, on_novo, nullptr);
-    ui_make_btn(scr, 502, 46, 110, 28, "NFC", COLOR_CARD, COLOR_MINT, open_nfc, nullptr);
+void ui_warehouse_build(lv_obj_t *scr) {
+    ui_page_title(scr, "Armazém", nullptr);
 
     wh_status = lv_label_create(scr);
-    ui_style_label(wh_status, &font_press_start_12, COLOR_MUTED);
-    lv_obj_set_pos(wh_status, 12, 72);
+    ui_style_label(wh_status, &font_ui_14, COLOR_MUTED);
+    lv_obj_set_pos(wh_status, 160, 14);
     lv_label_set_text(wh_status, "");
 
-    wh_search = make_ta(scr, 12, 92, 280, 34, "Buscar...", 78, true);
+    wh_busy = lv_label_create(scr);
+    ui_style_label(wh_busy, &font_ui_14, COLOR_AMBER);
+    lv_label_set_text(wh_busy, "…");
+    lv_obj_set_pos(wh_busy, 140, 14);
+    lv_obj_add_flag(wh_busy, LV_OBJ_FLAG_HIDDEN);
+
+    ui_make_btn(scr, 360, 0, 110, 40, "Atualizar", COLOR_CARD, COLOR_MINT, on_refresh, nullptr);
+    ui_make_btn(scr, 480, 0, 100, 40, "NFC", COLOR_CARD, COLOR_MINT, open_nfc, nullptr);
+    ui_make_btn(scr, 590, 0, 110, 40, "+ Novo", COLOR_ACCENT, COLOR_ON_ACCENT, on_novo, nullptr);
+
+    wh_search = make_ta(scr, 0, 52, 236, 36, "Buscar…", 78, true);
     lv_obj_add_event_cb(wh_search, on_filter_change, LV_EVENT_VALUE_CHANGED, nullptr);
 
-    wh_mat = make_dd(scr, 300, 92, 120, "Todos");
-    wh_brand = make_dd(scr, 428, 92, 130, "Todos");
-    wh_loc = make_dd(scr, 566, 92, 120, "Todos");
-    wh_sort = make_dd(scr, 694, 92, 98, "Id\nPeso\nMaterial\nMarca");
+    wh_mat = make_dd(scr, 244, 52, 112, "Todos");
+    wh_brand = make_dd(scr, 362, 52, 120, "Todos");
+    wh_loc = make_dd(scr, 488, 52, 112, "Todos");
+    wh_sort = make_dd(scr, 606, 52, 94, "Id\nPeso\nMaterial\nMarca");
     lv_obj_add_event_cb(wh_mat, on_filter_change, LV_EVENT_VALUE_CHANGED, nullptr);
     lv_obj_add_event_cb(wh_brand, on_filter_change, LV_EVENT_VALUE_CHANGED, nullptr);
     lv_obj_add_event_cb(wh_loc, on_filter_change, LV_EVENT_VALUE_CHANGED, nullptr);
     lv_obj_add_event_cb(wh_sort, on_filter_change, LV_EVENT_VALUE_CHANGED, nullptr);
 
-    wh_chip_arch = chip(scr, 12, 132, 130, "ARQUIVADOS", on_chip_arch, nullptr);
-    wh_chip_low  = chip(scr, 150, 132, 110, "<=200 g", on_chip_low, nullptr);
-    wh_chip_comp = chip(scr, 268, 132, 120, "COMPACTA", on_chip_comp, nullptr);
-    chip(scr, 396, 132, 100, "LIMPAR", on_chip_clear, nullptr);
+    wh_chip_arch = chip(scr, 0, 98, 116, "Arquivados", on_chip_arch, nullptr);
+    wh_chip_low  = chip(scr, 124, 98, 92, "≤200 g", on_chip_low, nullptr);
+    wh_chip_comp = chip(scr, 224, 98, 104, "Compacta", on_chip_comp, nullptr);
+    chip(scr, 336, 98, 84, "Limpar", on_chip_clear, nullptr);
 
     wh_summary = lv_label_create(scr);
-    ui_style_label(wh_summary, &lv_font_montserrat_14, COLOR_MUTED);
-    lv_obj_set_pos(wh_summary, 510, 136);
+    ui_style_label(wh_summary, &font_ui_14, COLOR_MUTED);
+    lv_label_set_long_mode(wh_summary, LV_LABEL_LONG_DOT);
+    lv_obj_set_size(wh_summary, 272, 18);
+    lv_obj_set_pos(wh_summary, 428, 106);
     lv_label_set_text(wh_summary, "");
 
-    wh_busy = lv_label_create(scr);
-    ui_style_label(wh_busy, &font_press_start_12, COLOR_GOLD);
-    lv_label_set_text(wh_busy, "...");
-    lv_obj_set_pos(wh_busy, 360, 52);
-    lv_obj_add_flag(wh_busy, LV_OBJ_FLAG_HIDDEN);
-
     wh_list = lv_obj_create(scr);
-    lv_obj_set_pos(wh_list, 8, 168);
-    lv_obj_set_size(wh_list, 784, 304);
+    lv_obj_set_pos(wh_list, -4, 138);
+    lv_obj_set_size(wh_list, CONTENT_W + 8, CONTENT_H - 138);
     lv_obj_set_style_bg_opa(wh_list, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(wh_list, 0, 0);
     lv_obj_set_style_pad_all(wh_list, 4, 0);
     lv_obj_set_style_radius(wh_list, 0, 0);
     lv_obj_set_scroll_dir(wh_list, LV_DIR_VER);
-
-    ui_add_tabs(scr, 1);
 }
 
 /* ---------- FICHA ---------- */
@@ -782,13 +788,13 @@ static void do_save_edit(void *) {
 }
 
 static void ask_save_edit(lv_event_t *) {
-    ui_confirm("SALVAR",
-               "Salvar no Spoolman? Isso nao movimenta a impressora.",
+    ui_confirm("Salvar",
+               "Salvar no Spoolman? Isso não movimenta a impressora.",
                do_save_edit, nullptr);
 }
 
 static void open_bind(lv_event_t *) {
-    open_nfc_for(ficha_id, "Aproxime a tag deste rolo e toque LER E ASSOCIAR.");
+    open_nfc_for(ficha_id, "Aproxime a tag deste rolo e toque Ler e associar.");
 }
 
 static void do_assign_ok(void *) {
@@ -802,17 +808,17 @@ static void do_feed_ok(void *) {
 
 static void pick_channel_then(bool assign, bool load, lv_event_t *) {
     form_load = load;
-    lv_obj_t *box = ui_overlay_box(assign ? "ATIVAR ROLO" : (load ? "CARREGAR" : "RETIRAR"), 600, 340);
+    lv_obj_t *box = ui_overlay_box(assign ? "Ativar rolo" : (load ? "Carregar" : "Retirar"), 600, 340);
     if (ui_inv && ui_inv->external_mode == 2) {
         lv_obj_t *w = lv_label_create(box);
-        ui_style_label(w, &lv_font_montserrat_14, COLOR_ALERT);
+        ui_style_label(w, &font_ui_14, COLOR_ALERT);
         lv_label_set_long_mode(w, LV_LABEL_LONG_WRAP);
         lv_obj_set_width(w, 560);
         lv_obj_set_pos(w, 8, 36);
-        lv_label_set_text(w, "Aviso: Filament Detection nao esta em External. Leitores internos podem apagar os dados.");
+        lv_label_set_text(w, "Aviso: Filament Detection não está em External. Leitores internos podem apagar os dados.");
     }
     lv_obj_t *h = lv_label_create(box);
-    ui_style_label(h, &lv_font_montserrat_14, COLOR_CREAM);
+    ui_style_label(h, &font_ui_14, COLOR_CREAM);
     lv_obj_set_pos(h, 8, 80);
     lv_label_set_text(h, "Escolha o feeder (1-4):");
 for (int i = 0; i < 4; i++) {
@@ -832,17 +838,17 @@ for (int i = 0; i < 4; i++) {
                         form_channel = ch;
                         form_load = ld;
                         if (asg) {
-                            ui_confirm("ATIVAR ROLO",
-                                       "Confirme que este e o rolo que esta no feeder escolhido. A associacao e enviada a U1.",
+                            ui_confirm("Ativar rolo",
+                                       "Confirme que este é o rolo que está no alimentador escolhido. A associação é enviada à U1.",
                                        do_assign_ok, nullptr);
                         } else {
-                            ui_confirm(ld ? "CARREGAR" : "RETIRAR",
+                            ui_confirm(ld ? "Carregar" : "Retirar",
                                        "A U1 pode aquecer o bico e movimentar o filamento. Continuar?",
                                        do_feed_ok, nullptr);
                         }
                     }, (void *)(intptr_t)token);
     }
-    ui_make_btn(box, 16, 270, 160, 36, "CANCELAR", COLOR_CARD, COLOR_MUTED,
+    ui_make_btn(box, 16, 270, 160, 36, "Cancelar", COLOR_CARD, COLOR_MUTED,
                 [](lv_event_t *){ ui_close_overlays(); }, nullptr);
 }
 
@@ -852,7 +858,7 @@ static void on_unload(lv_event_t *e) { pick_channel_then(false, false, e); }
 
 static void do_delete_ok(void *) {
     const WarehouseSpool *s = ficha_spool();
-    if (!s) { ui_toast("Rolo nao encontrado.", true); return; }
+    if (!s) { ui_toast("Rolo não encontrado.", true); return; }
     const char *typed = ta_delete ? lv_textarea_get_text(ta_delete) : "";
     char expect[16];
     snprintf(expect, sizeof(expect), "%d", s->info.id);
@@ -871,22 +877,22 @@ static void open_delete(lv_event_t *) {
     if (!s) return;
     char idn[160], msg[280];
     spool_identity(s, idn, sizeof(idn));
-    snprintf(msg, sizeof(msg), "Excluir %s?\nDigite o id %d para confirmar. Isso nao pode ser desfeito.", idn, s->info.id);
-    lv_obj_t *box = ui_overlay_box("EXCLUIR ROLO", 600, 300);
+    snprintf(msg, sizeof(msg), "Excluir %s?\nDigite o id %d para confirmar. Isso não pode ser desfeito.", idn, s->info.id);
+    lv_obj_t *box = ui_overlay_box("Excluir rolo", 600, 300);
     lv_obj_t *h = lv_label_create(box);
-    ui_style_label(h, &lv_font_montserrat_14, COLOR_CREAM);
+    ui_style_label(h, &font_ui_14, COLOR_CREAM);
     lv_label_set_long_mode(h, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(h, 570);
     lv_obj_set_pos(h, 8, 40);
     lv_label_set_text(h, msg);
     ta_delete = make_ta(box, 8, 140, 200, 36, "id", 8, true);
     lv_textarea_set_accepted_chars(ta_delete, "0123456789");
-    ui_make_btn(box, 8, 220, 180, 36, "CANCELAR", COLOR_CARD, COLOR_MUTED,
+    ui_make_btn(box, 8, 220, 180, 36, "Cancelar", COLOR_CARD, COLOR_MUTED,
                 [](lv_event_t *){ ui_close_overlays(); }, nullptr);
-    ui_make_btn(box, 300, 220, 220, 36, "EXCLUIR", COLOR_ALERT, 0x081725,
+    ui_make_btn(box, 300, 220, 220, 36, "Excluir", COLOR_ALERT, 0x081725,
                 [](lv_event_t *){
-                    ui_confirm("EXCLUIR",
-                               "Confirma a exclusao definitiva deste rolo no Spoolman?",
+                    ui_confirm("Excluir",
+                               "Confirma a exclusão definitiva deste rolo no Spoolman?",
                                do_delete_ok, nullptr);
                 }, nullptr);
 }
@@ -894,24 +900,24 @@ static void open_delete(lv_event_t *) {
 void ui_ficha_open(int id) {
     if (!ui_inv) return;
     const WarehouseSpool *s = inventory_find(ui_inv, id);
-    if (!s) { ui_toast("Rolo nao encontrado. Atualize o estoque.", true); return; }
+    if (!s) { ui_toast("Rolo não encontrado. Atualize o estoque.", true); return; }
     ficha_id = id;
-    lv_obj_t *box = ui_overlay_box("FICHA DO ROLO", 760, 440);
+    lv_obj_t *box = ui_overlay_box("Ficha do rolo", 760, 440);
     /* header */
     lv_obj_t *sw = lv_obj_create(box);
     lv_obj_set_pos(sw, 8, 36);
     lv_obj_set_size(sw, 36, 36);
     lv_obj_set_style_bg_color(sw, ui_C(ui_parse_hex(s->info.color_hex)), 0);
     lv_obj_set_style_border_width(sw, 1, 0);
-    lv_obj_set_style_border_color(sw, ui_C(COLOR_CREAM), 0);
-    lv_obj_set_style_radius(sw, 0, 0);
+    lv_obj_set_style_border_color(sw, ui_C(0xC9CDD4), 0);
+    lv_obj_set_style_radius(sw, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_pad_all(sw, 0, 0);
     lv_obj_clear_flag(sw, LV_OBJ_FLAG_SCROLLABLE);
 
     char line[200], idn[160];
     spool_identity(s, idn, sizeof(idn));
     lv_obj_t *tt = lv_label_create(box);
-    ui_style_label(tt, &font_press_start_12, COLOR_GOLD);
+    ui_style_label(tt, &font_ui_16, COLOR_TEXT);
     lv_obj_set_pos(tt, 52, 36);
     lv_label_set_text(tt, idn);
 
@@ -921,29 +927,29 @@ void ui_ficha_open(int id) {
              (s->info.id == ui_inv->active_id) ? "EM USO  " : "",
              s->card_uids[0] ? s->card_uids : "--");
     lv_obj_t *sub = lv_label_create(box);
-    ui_style_label(sub, &lv_font_montserrat_14, COLOR_MUTED);
+    ui_style_label(sub, &font_ui_14, COLOR_MUTED);
     lv_label_set_long_mode(sub, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(sub, 700);
-    lv_obj_set_pos(sub, 52, 58);
+    lv_obj_set_width(sub, 670);
+    lv_obj_set_pos(sub, 52, 60);
     lv_label_set_text(sub, line);
 
     lv_obj_t *l1 = lv_label_create(box);
-    ui_style_label(l1, &font_press_start_12, COLOR_MUTED);
-    lv_label_set_text(l1, "LOCAL");
+    ui_style_label(l1, &font_ui_14, COLOR_MUTED);
+    lv_label_set_text(l1, "Local");
     lv_obj_set_pos(l1, 8, 100);
-    ta_location = make_ta(box, 8, 118, 280, 34, "local", 64, true);
+    ta_location = make_ta(box, 8, 118, 280, 34, "Local", 64, true);
     lv_textarea_set_text(ta_location, s->location);
 
     lv_obj_t *l2 = lv_label_create(box);
-    ui_style_label(l2, &font_press_start_12, COLOR_MUTED);
-    lv_label_set_text(l2, "COMENTARIO");
+    ui_style_label(l2, &font_ui_14, COLOR_MUTED);
+    lv_label_set_text(l2, "Comentário");
     lv_obj_set_pos(l2, 300, 100);
-    ta_comment = make_ta(box, 300, 118, 430, 34, "comentario", 200, true);
+    ta_comment = make_ta(box, 300, 118, 420, 34, "Comentário", 200, true);
     lv_textarea_set_text(ta_comment, s->comment);
 
     cb_weight = lv_checkbox_create(box);
     lv_checkbox_set_text(cb_weight, "Atualizar peso restante (g)");
-    lv_obj_set_style_text_font(cb_weight, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(cb_weight, &font_ui_14, 0);
     lv_obj_set_style_text_color(cb_weight, ui_C(COLOR_CREAM), 0);
     lv_obj_set_pos(cb_weight, 8, 162);
     ta_weight = make_ta(box, 340, 156, 120, 34, "g", 8, true);
@@ -954,13 +960,13 @@ void ui_ficha_open(int id) {
     }
     /* desmarcado por padrao: nao sobrescreve o consumo ao vivo */
 
-    ui_make_btn(box, 8, 210, 180, 36, "SALVAR", COLOR_MINT, 0x081725, ask_save_edit, nullptr);
+    ui_make_btn(box, 8, 210, 180, 36, "Salvar", COLOR_MINT, 0x081725, ask_save_edit, nullptr);
     ui_make_btn(box, 200, 210, 170, 36, "NFC", COLOR_CARD, COLOR_MINT, open_bind, nullptr);
-    ui_make_btn(box, 380, 210, 170, 36, "ATIVAR", COLOR_GOLD, 0x081725, on_assign, nullptr);
-    ui_make_btn(box, 560, 210, 170, 36, "CARREGAR", COLOR_CARD, COLOR_MINT, on_load, nullptr);
-    ui_make_btn(box, 380, 258, 170, 36, "RETIRAR", COLOR_CARD, COLOR_MINT, on_unload, nullptr);
-    ui_make_btn(box, 560, 258, 170, 36, "EXCLUIR", COLOR_CARD, COLOR_ALERT, open_delete, nullptr);
-    ui_make_btn(box, 8, 370, 180, 36, "VOLTAR", COLOR_CARD, COLOR_MUTED,
+    ui_make_btn(box, 380, 210, 170, 36, "Ativar", COLOR_GOLD, 0x081725, on_assign, nullptr);
+    ui_make_btn(box, 560, 210, 170, 36, "Carregar", COLOR_CARD, COLOR_MINT, on_load, nullptr);
+    ui_make_btn(box, 380, 258, 170, 36, "Retirar", COLOR_CARD, COLOR_MINT, on_unload, nullptr);
+    ui_make_btn(box, 560, 258, 170, 36, "Excluir", COLOR_CARD, COLOR_ALERT, open_delete, nullptr);
+    ui_make_btn(box, 8, 370, 180, 36, "Voltar", COLOR_CARD, COLOR_MUTED,
                 [](lv_event_t *){ ui_close_overlays(); }, nullptr);
 }
 
@@ -1010,15 +1016,15 @@ static void do_create_ok(void *) {
 
 void ui_new_spool_open(void) {
     if (!inventory_busy()) inventory_request_catalog();
-    lv_obj_t *box = ui_overlay_box("NOVO ROLO", 760, 440);
+    lv_obj_t *box = ui_overlay_box("Novo rolo", 760, 440);
     ta_uid = nullptr; /* a tag é associada depois de salvar (botao Associar tag) */
     lv_obj_t *u = lv_label_create(box);
-    ui_style_label(u, &lv_font_montserrat_14, COLOR_MUTED);
+    ui_style_label(u, &font_ui_14, COLOR_MUTED);
     lv_label_set_text(u, "A tag NFC e associada logo depois de salvar.");
     lv_obj_set_pos(u, 8, 40);
 
     lv_obj_t *f = lv_label_create(box);
-    ui_style_label(f, &font_press_start_12, COLOR_MUTED);
+    ui_style_label(f, &font_ui_14, COLOR_MUTED);
     lv_label_set_text(f, "FILAMENTO");
     lv_obj_set_pos(f, 8, 98);
 
@@ -1044,7 +1050,7 @@ void ui_new_spool_open(void) {
 
     cb_newfil = lv_checkbox_create(box);
     lv_checkbox_set_text(cb_newfil, "Novo filamento");
-    lv_obj_set_style_text_font(cb_newfil, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(cb_newfil, &font_ui_14, 0);
     lv_obj_set_style_text_color(cb_newfil, ui_C(COLOR_CREAM), 0);
     lv_obj_set_pos(cb_newfil, 420, 118);
 
@@ -1060,7 +1066,7 @@ void ui_new_spool_open(void) {
     dd_dir = make_dd(box, 224, 196, 160, "coaxial\nlongitudinal");
 
     lv_obj_t *w = lv_label_create(box);
-    ui_style_label(w, &font_press_start_12, COLOR_MUTED);
+    ui_style_label(w, &font_ui_14, COLOR_MUTED);
     lv_label_set_text(w, "PESO inicial / restante (g)");
     lv_obj_set_pos(w, 8, 236);
     ta_init = make_ta(box, 8, 254, 120, 32, "1000", 8, true);
@@ -1071,12 +1077,12 @@ void ui_new_spool_open(void) {
     ta_location = make_ta(box, 280, 254, 200, 32, "Local", 64, true);
     ta_comment = make_ta(box, 490, 254, 240, 32, "Comentario", 200, true);
 
-    ui_make_btn(box, 8, 370, 180, 36, "CANCELAR", COLOR_CARD, COLOR_MUTED,
+    ui_make_btn(box, 8, 370, 180, 36, "Cancelar", COLOR_CARD, COLOR_MUTED,
                 [](lv_event_t *){ ui_close_overlays(); }, nullptr);
-    ui_make_btn(box, 500, 370, 230, 36, "SALVAR", COLOR_MINT, 0x081725,
+    ui_make_btn(box, 500, 370, 230, 36, "Salvar", COLOR_MINT, 0x081725,
                 [](lv_event_t *){
-                    ui_confirm("NOVO ROLO",
-                               "Salvar no Spoolman? Isso nao movimenta a impressora.",
+                    ui_confirm("Novo rolo",
+                               "Salvar no Spoolman? Isso não movimenta a impressora.",
                                do_create_ok, nullptr);
                 }, nullptr);
 }
@@ -1098,7 +1104,7 @@ static void hist_refill(void) {
     int n = history_filter(q, type, idx, HISTORY_MAX);
     if (n == 0) {
         lv_obj_t *l = lv_label_create(hist_list);
-        ui_style_label(l, &font_press_start_12, COLOR_MUTED);
+        ui_style_label(l, &font_ui_14, COLOR_MUTED);
         lv_label_set_text(l, "Nenhum evento.");
         lv_obj_set_pos(l, 8, 8);
         return;
@@ -1108,22 +1114,24 @@ static void hist_refill(void) {
         history_get(idx[i], line, sizeof(line));
         const char *et = history_event_type(line);
         uint32_t col = COLOR_CREAM;
-        if (strcmp(et, "problem") == 0) col = COLOR_ALERT;
-        else if (strcmp(et, "association") == 0) col = COLOR_GOLD;
-        else if (strcmp(et, "read") == 0) col = COLOR_MINT;
+        if (strcmp(et, "problem") == 0) col = COLOR_RED;
+        else if (strcmp(et, "association") == 0) col = 0xB57A1E;
+        else if (strcmp(et, "read") == 0) col = COLOR_ACCENT;
         lv_obj_t *row = lv_obj_create(hist_list);
-        lv_obj_set_pos(row, 0, i * 36);
-        lv_obj_set_size(row, 760, 34);
-        lv_obj_set_style_bg_color(row, ui_C(COLOR_CARD), 0);
-        lv_obj_set_style_bg_opa(row, LV_OPA_80, 0);
-        lv_obj_set_style_border_width(row, 0, 0);
-        lv_obj_set_style_pad_all(row, 4, 0);
-        lv_obj_set_style_radius(row, 0, 0);
+        lv_obj_set_pos(row, 0, i * 42);
+        lv_obj_set_size(row, CONTENT_W - 8, 36);
+        lv_obj_set_style_bg_color(row, ui_C(COLOR_SURFACE), 0);
+        lv_obj_set_style_bg_opa(row, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_color(row, ui_C(COLOR_LINE), 0);
+        lv_obj_set_style_border_width(row, 1, 0);
+        lv_obj_set_style_pad_hor(row, 12, 0);
+        lv_obj_set_style_pad_ver(row, 8, 0);
+        lv_obj_set_style_radius(row, 10, 0);
         lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_t *lb = lv_label_create(row);
-        ui_style_label(lb, &lv_font_montserrat_14, col);
+        ui_style_label(lb, &font_ui_14, col);
         lv_label_set_long_mode(lb, LV_LABEL_LONG_DOT);
-        lv_obj_set_width(lb, 740);
+        lv_obj_set_width(lb, CONTENT_W - 36);
         lv_label_set_text(lb, line);
     }
 }
@@ -1132,33 +1140,27 @@ static void on_hist_change(lv_event_t *) { hist_refill(); }
 
 void ui_history_on_show(void) { hist_refill(); }
 
-void ui_history_build(void) {
-    lv_obj_t *scr = scr_history;
-    lv_obj_t *t = lv_label_create(scr);
-    ui_style_label(t, &font_press_start_16, COLOR_MINT);
-    lv_label_set_text(t, "DIARIO");
-    lv_obj_set_pos(t, 12, 48);
+void ui_history_build(lv_obj_t *scr) {
+    ui_page_title(scr, "Diário", ui_go_settings);
 
-    hist_search = make_ta(scr, 12, 88, 400, 34, "Buscar no diario...", 78, true);
+    hist_search = make_ta(scr, 0, 52, 400, 36, "Buscar no diário…", 78, true);
     lv_obj_add_event_cb(hist_search, on_hist_change, LV_EVENT_VALUE_CHANGED, nullptr);
-    hist_type = make_dd(scr, 424, 88, 200, "Todos\nProblema\nAssociacao\nLeitura\nOutros");
+    hist_type = make_dd(scr, 412, 52, 200, "Todos\nProblema\nAssociação\nLeitura\nOutros");
     lv_obj_add_event_cb(hist_type, on_hist_change, LV_EVENT_VALUE_CHANGED, nullptr);
 
     lv_obj_t *note = lv_label_create(scr);
-    ui_style_label(note, &lv_font_montserrat_14, COLOR_MUTED);
-    lv_obj_set_pos(note, 12, 128);
-    lv_label_set_text(note, "Historico local desta tela (60 linhas). Compartilhar diagnostico nao esta disponivel neste painel.");
+    ui_style_label(note, &font_ui_14, COLOR_MUTED);
+    lv_obj_set_pos(note, 4, 98);
+    lv_label_set_text(note, "Histórico local desta tela (60 linhas).");
 
     hist_list = lv_obj_create(scr);
-    lv_obj_set_pos(hist_list, 12, 160);
-    lv_obj_set_size(hist_list, 776, 308);
+    lv_obj_set_pos(hist_list, 0, 124);
+    lv_obj_set_size(hist_list, CONTENT_W, CONTENT_H - 124);
     lv_obj_set_style_bg_opa(hist_list, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(hist_list, 0, 0);
     lv_obj_set_style_pad_all(hist_list, 0, 0);
     lv_obj_set_style_radius(hist_list, 0, 0);
     lv_obj_set_scroll_dir(hist_list, LV_DIR_VER);
-
-    ui_add_tabs(scr, 2);
 }
 
 /* ---------- WIFI ---------- */
@@ -1171,22 +1173,22 @@ static void do_wifi_save(void *) {
 
 static void open_wifi_pass(const char *ssid, bool locked) {
     ui_cpy(pending_ssid, sizeof(pending_ssid), ssid);
-    lv_obj_t *box = ui_overlay_box("CONECTAR", 560, 280);
+    lv_obj_t *box = ui_overlay_box("Conectar", 560, 280);
     lv_obj_t *h = lv_label_create(box);
-    ui_style_label(h, &lv_font_montserrat_14, COLOR_CREAM);
+    ui_style_label(h, &font_ui_14, COLOR_CREAM);
     lv_obj_set_pos(h, 8, 40);
     char line[96];
     snprintf(line, sizeof(line), "Rede: %s", ssid);
     lv_label_set_text(h, line);
     ta_uid = make_ta(box, 8, 90, 500, 36, locked ? "Senha" : "(rede aberta)", 63, true);
     if (locked) lv_textarea_set_password_mode(ta_uid, true);
-    ui_make_btn(box, 8, 200, 180, 36, "CANCELAR", COLOR_CARD, COLOR_MUTED,
+    ui_make_btn(box, 8, 200, 180, 36, "Cancelar", COLOR_CARD, COLOR_MUTED,
                 [](lv_event_t *){ ui_close_overlays(); }, nullptr);
-    ui_make_btn(box, 300, 200, 220, 36, "SALVAR", COLOR_MINT, 0x081725,
+    ui_make_btn(box, 300, 200, 220, 36, "Salvar", COLOR_MINT, 0x081725,
                 [](lv_event_t *){
                     char msg[160];
                     snprintf(msg, sizeof(msg), "Salvar \"%s\" e reiniciar a tela?", pending_ssid);
-                    ui_confirm("WIFI", msg, do_wifi_save, nullptr);
+                    ui_confirm("Wi-Fi", msg, do_wifi_save, nullptr);
                 }, nullptr);
 }
 
@@ -1205,26 +1207,28 @@ static void wifi_fill(void) {
     lv_obj_clean(wifi_list);
     if (wifi_scanning) {
         lv_obj_t *l = lv_label_create(wifi_list);
-        ui_style_label(l, &font_press_start_12, COLOR_MUTED);
+        ui_style_label(l, &font_ui_14, COLOR_MUTED);
         lv_label_set_text(l, "Varrendo redes 2.4 GHz...");
         lv_obj_set_pos(l, 8, 8);
         return;
     }
     if (wifi_nn <= 0) {
         lv_obj_t *l = lv_label_create(wifi_list);
-        ui_style_label(l, &font_press_start_12, COLOR_MUTED);
-        lv_label_set_text(l, "Nenhuma rede. Toque em VARRER.");
+        ui_style_label(l, &font_ui_14, COLOR_MUTED);
+        lv_label_set_text(l, "Nenhuma rede. Toque em Varrer.");
         lv_obj_set_pos(l, 8, 8);
         return;
     }
     for (int i = 0; i < wifi_nn; i++) {
         lv_obj_t *row = lv_obj_create(wifi_list);
-        lv_obj_set_pos(row, 0, i * 48);
-        lv_obj_set_size(row, 760, 44);
-        lv_obj_set_style_bg_color(row, ui_C(COLOR_CARD), 0);
-        lv_obj_set_style_border_color(row, ui_C(COLOR_MINT), 0);
-        lv_obj_set_style_border_width(row, 2, 0);
-        lv_obj_set_style_radius(row, 0, 0);
+        lv_obj_set_pos(row, 0, i * 54);
+        lv_obj_set_size(row, CONTENT_W - 8, 48);
+        lv_obj_set_style_bg_color(row, ui_C(COLOR_SURFACE), 0);
+        lv_obj_set_style_bg_color(row, ui_C(COLOR_ACCENT_BG), LV_STATE_PRESSED);
+        lv_obj_set_style_border_color(row, ui_C(COLOR_LINE), 0);
+        lv_obj_set_style_border_width(row, 1, 0);
+        lv_obj_set_style_shadow_width(row, 0, 0);
+        lv_obj_set_style_radius(row, 12, 0);
         lv_obj_set_style_pad_all(row, 6, 0);
         lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_add_event_cb(row, [](lv_event_t *e) {
@@ -1235,13 +1239,13 @@ static void wifi_fill(void) {
         int bars = wifi_nets[i].rssi > -55 ? 4 : wifi_nets[i].rssi > -70 ? 3 : wifi_nets[i].rssi > -80 ? 2 : 1;
         snprintf(line, sizeof(line), "%s   %s   %d dBm  %s",
                  wifi_nets[i].ssid,
-                 wifi_nets[i].locked ? "lock" : "aberta",
+                 wifi_nets[i].locked ? LV_SYMBOL_EYE_CLOSE " senha" : "aberta",
                  (int)wifi_nets[i].rssi,
                  bars >= 4 ? "****" : bars == 3 ? "***" : bars == 2 ? "**" : "*");
         lv_obj_t *lb = lv_label_create(row);
-        ui_style_label(lb, &lv_font_montserrat_14, COLOR_CREAM);
+        ui_style_label(lb, &font_ui_16, COLOR_TEXT);
         lv_label_set_text(lb, line);
-        lv_obj_center(lb);
+        lv_obj_align(lb, LV_ALIGN_LEFT_MID, 8, 0);
     }
 }
 
@@ -1251,8 +1255,8 @@ static void wifi_show_current(void) {
     wifi_current(ssid, sizeof(ssid), ip, sizeof(ip));
     char line[160];
     if (ssid[0])
-        snprintf(line, sizeof(line), "Agora: %s    IP %s%s", ssid, ip[0] ? ip : "--",
-                 wifi_is_portal() ? "    (portal U1-DISPLAY)" : "");
+        snprintf(line, sizeof(line), "Conectada a %s · IP %s%s", ssid, ip[0] ? ip : "--",
+                 wifi_is_portal() ? " · portal U1-DISPLAY" : "");
     else
         snprintf(line, sizeof(line), "Desconectado. Portal de fallback: U1-DISPLAY (senha u1display).");
     lv_label_set_text(wifi_cur, line);
@@ -1265,7 +1269,7 @@ static void on_wifi_scan(lv_event_t *e) {
         wifi_scanning = true;
         wifi_fill();
     } else {
-        ui_toast("Nao foi possivel varrer as redes.", true);
+        ui_toast("Não foi possível varrer as redes.", true);
     }
 }
 
@@ -1290,33 +1294,30 @@ void ui_wifi_tick(void) {
     wifi_fill();
 }
 
-void ui_wifi_build(void) {
-    lv_obj_t *scr = scr_wifi;
-    lv_obj_t *t = lv_label_create(scr);
-    ui_style_label(t, &font_press_start_16, COLOR_MINT);
-    lv_label_set_text(t, "WI-FI");
-    lv_obj_set_pos(t, 12, 48);
+void ui_wifi_build(lv_obj_t *scr) {
+    ui_page_title(scr, "Wi-Fi", ui_go_settings);
 
-    wifi_cur = lv_label_create(scr);
-    ui_style_label(wifi_cur, &lv_font_montserrat_14, COLOR_CREAM);
-    lv_obj_set_pos(wifi_cur, 12, 88);
+    lv_obj_t *k = ui_make_card(scr, 0, 52, CONTENT_W, 104);
+    wifi_cur = lv_label_create(k);
+    ui_style_label(wifi_cur, &font_ui_16, COLOR_TEXT);
+    lv_obj_set_pos(wifi_cur, 18, 16);
     lv_label_set_text(wifi_cur, "");
 
-    lv_obj_t *note = lv_label_create(scr);
-    ui_style_label(note, &lv_font_montserrat_14, COLOR_GOLD);
-    lv_obj_set_pos(note, 12, 118);
-    lv_label_set_text(note, "Esta placa so fala 2.4 GHz. Redes 5 GHz nao aparecem. A senha fica so na NVS da tela.");
+    lv_obj_t *note = lv_label_create(k);
+    ui_style_label(note, &font_ui_14, COLOR_TEXT2);
+    lv_label_set_long_mode(note, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(note, 500);
+    lv_obj_set_pos(note, 18, 46);
+    lv_label_set_text(note, "Esta placa só fala 2,4 GHz: redes de 5 GHz não aparecem. A senha fica só na memória da tela.");
 
-    ui_make_btn(scr, 12, 150, 140, 36, "VARRER", COLOR_MINT, 0x081725, on_wifi_scan, nullptr);
+    ui_make_btn(k, 548, 30, 132, 44, "Varrer", COLOR_ACCENT, COLOR_ON_ACCENT, on_wifi_scan, nullptr);
 
     wifi_list = lv_obj_create(scr);
-    lv_obj_set_pos(wifi_list, 12, 200);
-    lv_obj_set_size(wifi_list, 776, 268);
+    lv_obj_set_pos(wifi_list, 0, 168);
+    lv_obj_set_size(wifi_list, CONTENT_W, CONTENT_H - 168);
     lv_obj_set_style_bg_opa(wifi_list, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(wifi_list, 0, 0);
     lv_obj_set_style_pad_all(wifi_list, 0, 0);
     lv_obj_set_style_radius(wifi_list, 0, 0);
     lv_obj_set_scroll_dir(wifi_list, LV_DIR_VER);
-
-    ui_add_tabs(scr, 3);
 }
