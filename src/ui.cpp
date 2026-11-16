@@ -1,4 +1,5 @@
 #include "ui_priv.h"
+#include "psram_json.h"
 #include "control.h"
 
 #ifndef LV_COLOR_MAKE
@@ -8,7 +9,7 @@
 PrinterSnapshot ui_snap;
 InventorySnapshot *ui_inv = nullptr;
 CatalogSnapshot *ui_cat = nullptr;
-ActionResult ui_act;
+ActionResult &ui_act = *psram_calloc_obj<ActionResult>();
 uint32_t ui_inv_seq = 0, ui_cat_seq = 0, ui_act_seq = 0, ui_mr_seq = 0;
 lv_obj_t *scr_factory, *scr_details, *scr_warehouse, *scr_history, *scr_wifi;
 StockFilter ui_filter;

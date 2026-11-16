@@ -18,6 +18,13 @@ struct PsramJsonAllocator : ArduinoJson::Allocator {
     }
 };
 
+/* Bloco zerado na PSRAM (cai para a RAM interna se faltar). */
+template <typename T> inline T *psram_calloc_obj() {
+    void *p = heap_caps_calloc(1, sizeof(T), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!p) p = calloc(1, sizeof(T));
+    return static_cast<T *>(p);
+}
+
 inline ArduinoJson::Allocator *psram_json() {
     static PsramJsonAllocator a;
     return &a;

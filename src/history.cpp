@@ -20,7 +20,17 @@ static SemaphoreHandle_t hist_mutex;
 #define HUNLOCK() do {} while (0)
 #endif
 
+#ifdef ARDUINO
+#include <esp_heap_caps.h>
+/* ~9,6 KB: na PSRAM para não pesar na RAM interna. */
+static char (*lines)[HISTORY_LINE] = [] {
+    void *p = heap_caps_calloc(HISTORY_MAX, HISTORY_LINE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!p) p = calloc(HISTORY_MAX, HISTORY_LINE);
+    return static_cast<char (*)[HISTORY_LINE]>(p);
+}();
+#else
 static char lines[HISTORY_MAX][HISTORY_LINE];
+#endif
 static int count = 0;
 static bool inited = false;
 

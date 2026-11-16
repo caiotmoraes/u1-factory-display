@@ -25,7 +25,7 @@ static SemaphoreHandle_t mutex;
 static TaskHandle_t task_h;
 static InventorySnapshot *g_inv;
 static CatalogSnapshot *g_cat;
-static ActionResult g_act;
+static ActionResult &g_act = *psram_calloc_obj<ActionResult>(); /* PSRAM (~6 KB) */
 static uint32_t inv_seq = 1, cat_seq = 1, act_seq = 1;
 
 static char *http_buf;
@@ -171,7 +171,12 @@ static int http_do(const char *url, const char *method, const char *payload,
                     continue;
                 }
                 int n = s->read((uint8_t *)http_buf + len, want - len);
-                if (n <= 0) break;
+                if (n < 0) break;          /* falha do socket (ex.: sem RAM p/ buffer) */
+                if (n == 0) { /* antes: parava e truncava o corpo */
+                    if (millis() - last > (unsigned long)t) break;
+                    delay(4);
+                    continue;
+                }
                 len += n;
                 last = millis();
             }
@@ -464,7 +469,12 @@ static void do_refresh(void) {
     if (n < 0) {
         Serial.printf("[inventory] JSON do estoque invalido (%d bytes): %.80s\n", len, http_buf ? http_buf : "");
         free(tmp);
-        inv_publish(INV_ERROR, err[0] ? err : "JSON do estoque invalido");
+        {
+            char base[80];
+            cpy(base, sizeof(base), err[0] ? err : "JSON do estoque invalido");
+            snprintf(err, sizeof(err), "%s (%d bytes recebidos). Toque ATUALIZA.", base, len);
+        }
+        inv_publish(INV_ERROR, err);
         act_set(AR_ERR, err[0] ? err : "JSON invalido");
         return;
     }

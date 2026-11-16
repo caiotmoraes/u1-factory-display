@@ -47,7 +47,7 @@ void ui_cpy(char *d, size_t n, const char *s);
 extern PrinterSnapshot ui_snap;
 extern InventorySnapshot *ui_inv;
 extern CatalogSnapshot *ui_cat;
-extern ActionResult ui_act;
+extern ActionResult &ui_act; /* PSRAM (~6 KB) */
 extern uint32_t ui_inv_seq, ui_cat_seq, ui_act_seq, ui_mr_seq;
 extern lv_obj_t *scr_factory, *scr_details, *scr_warehouse, *scr_history, *scr_wifi;
 extern StockFilter ui_filter;
