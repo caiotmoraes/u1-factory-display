@@ -39,6 +39,7 @@ typedef struct {
     bool valid;
     bool printer_ready;
     bool busy_print;          /* printing ou paused */
+    bool busy_motion;         /* idle_timeout indica execução de movimento */
     FeederChannel ch[4];
 } FeederInfo;
 
@@ -53,7 +54,7 @@ typedef struct {
 
     PrinterState state;
     bool cancelled;            /* complete mas foi cancelamento */
-    char filename[SNAPSHOT_STR];
+    char filename[192];
     float progress;            /* 0..1 */
     int layer;
     int layer_total;

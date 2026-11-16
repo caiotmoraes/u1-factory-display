@@ -70,6 +70,7 @@ typedef enum {
     ACT_DELETE,
     ACT_ASSIGN,
     ACT_NFC_AUTO,
+    ACT_CONTROL,
     ACT_LOAD,
     ACT_UNLOAD
 } ActKind;

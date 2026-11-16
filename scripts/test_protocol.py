@@ -134,6 +134,21 @@ def main():
         })
         assert "result" in deleted, deleted
 
+        assert post("/printer/print/pause", {})["result"] == "ok"
+        assert get("/printer/objects/query")["result"]["status"]["print_stats"]["state"] == "paused"
+        assert post("/printer/print/resume", {})["result"] == "ok"
+        assert post("/printer/print/cancel", {})["result"] == "ok"
+        filename = get("/server/files/list?root=gcodes")["result"][0]["path"]
+        assert post("/printer/print/start", {"filename": filename})["result"] == "ok"
+        assert get("/printer/objects/query")["result"]["status"]["print_stats"]["filename"] == filename
+        try:
+            post("/printer/print/start", {"filename": filename})
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 409
+        else:
+            raise AssertionError("O simulador aceitou duas impressões simultâneas.")
+        assert post("/printer/emergency_stop", {})["result"] == "ok"
+        assert get("/printer/objects/query")["result"]["status"]["print_stats"]["state"] == "error"
         print("test_protocol: todos os endpoints ok")
         return 0
     finally:

@@ -1,4 +1,5 @@
 #include "ui_priv.h"
+#include "control.h"
 
 #ifndef LV_COLOR_MAKE
 #define LV_COLOR_MAKE(r,g,b) lv_color_make(r,g,b)
@@ -103,15 +104,17 @@ static void tab_clicked(lv_event_t *e) {
     if (id == 0) ui_go_factory(e);
     else if (id == 1) ui_go_warehouse(e);
     else if (id == 2) ui_go_history(e);
-    else ui_go_wifi(e);
+    else if (id == 3) ui_go_wifi(e);
+    else ui_go_control(e);
 }
 
 void ui_add_tabs(lv_obj_t *parent, int active) {
-    struct { int x, w; const char *name; } t[4] = {
+    struct { int x, w; const char *name; } t[] = {
         {TAB_WIFI_X, TAB_WIFI_W, "WIFI"},
         {TAB_FAB_X,  TAB_FAB_W,  "FABRICA"},
         {TAB_ARM_X,  TAB_ARM_W,  "ARMAZEM"},
         {TAB_DIA_X,  TAB_DIA_W,  "DIARIO"},
+        {270, 118, "CONTROLE"},
     };
     /* active: 0 factory, 1 warehouse, 2 history, 3 wifi — visual index 1,2,3,0 */
     int vis[4] = {3, 0, 1, 2}; /* tab i corresponds to vis */
@@ -119,9 +122,9 @@ void ui_add_tabs(lv_obj_t *parent, int active) {
     int active_i[4] = {3, 0, 1, 2};
     /* Map: we pass active 0=fab 1=arm 2=dia 3=wifi, tab visual order WIFI,FAB,ARM,DIA */
     int highlight[4] = {3, 0, 1, 2};
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 5; i++) {
         /* i: 0 WIFI (active==3), 1 FAB (0), 2 ARM (1), 3 DIA (2) */
-        int act_id = (i == 0) ? 3 : (i - 1);
+        int act_id = i == 4 ? 4 : i == 0 ? 3 : i - 1;
         bool on = (act_id == active);
         lv_obj_t *b = lv_btn_create(parent);
         lv_obj_set_pos(b, t[i].x, TAB_Y);
@@ -614,6 +617,7 @@ static void on_timer(lv_timer_t *) {
     }
     ui_warehouse_tick();
     ui_wifi_tick();
+    control_ui_tick();
 
     if (toast_box && toast_until && millis() > toast_until) {
         lv_obj_add_flag(toast_box, LV_OBJ_FLAG_HIDDEN);
@@ -632,26 +636,27 @@ static lv_obj_t *make_mini_card(lv_obj_t *parent, int x, int y, int w, int h) {
 }
 
 static void add_factory_tabs(lv_obj_t *parent) {
-    struct { int x, w; const char *name; int act; } t[4] = {
-        {FTAB_WIFI_X, FTAB_WIFI_W, "WIFI",    3},
-        {FTAB_FAB_X,  FTAB_FAB_W,  "FABRICA", 0},
-        {FTAB_ARM_X,  FTAB_ARM_W,  "ARMAZEM", 1},
-        {FTAB_DIA_X,  FTAB_DIA_W,  "DIARIO",  2},
+    struct { int x, w; const char *name; int act; } t[] = {
+        {8, 53, "WIFI", 3},
+        {64, 87, "FABRICA", 0},
+        {154, 86, "ARMAZEM", 1},
+        {243, 67, "DIARIO", 2},
+        {313, 83, "CONTROLE", 4},
     };
-    for (int i = 0; i < 4; i++) {
-        bool on = (t[i].act == 0);
+    for (const auto &tab : t) {
+        bool on = (tab.act == 0);
         lv_obj_t *b = lv_btn_create(parent);
-        lv_obj_set_pos(b, t[i].x, FTAB_Y);
-        lv_obj_set_size(b, t[i].w, FTAB_H);
+        lv_obj_set_pos(b, tab.x, FTAB_Y);
+        lv_obj_set_size(b, tab.w, FTAB_H);
         lv_obj_set_style_radius(b, 0, 0);
         lv_obj_set_style_bg_color(b, ui_C(on ? COLOR_MINT : COLOR_CARD), 0);
         lv_obj_set_style_border_color(b, ui_C(COLOR_MINT), 0);
         lv_obj_set_style_border_width(b, 2, 0);
         lv_obj_set_style_shadow_width(b, 0, 0);
-        lv_obj_add_event_cb(b, tab_clicked, LV_EVENT_CLICKED, (void *)(intptr_t)t[i].act);
+        lv_obj_add_event_cb(b, tab_clicked, LV_EVENT_CLICKED, (void *)(intptr_t)tab.act);
         lv_obj_t *l = lv_label_create(b);
-        lv_label_set_text(l, t[i].name);
-        ui_style_label(l, &font_press_start_12, on ? 0x081725 : COLOR_MINT);
+        lv_label_set_text(l, tab.name);
+        ui_style_label(l, &lv_font_montserrat_14, on ? 0x081725 : COLOR_MINT);
         lv_obj_center(l);
     }
 }
@@ -1021,6 +1026,7 @@ void ui_init(void) {
     lv_obj_set_style_bg_color(scr_wifi, ui_C(COLOR_NAVY), 0);
     lv_obj_clear_flag(scr_wifi, LV_OBJ_FLAG_SCROLLABLE);
     ui_wifi_build();
+    control_ui_build();
 
     lv_scr_load(scr_factory);
     lv_timer_create(on_timer, 200, nullptr);

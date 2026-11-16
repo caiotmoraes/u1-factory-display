@@ -396,6 +396,27 @@ Não implementada. Pré-visualizações: `../preview/proposta-armazem.png` e
 
 Nesta versão a aba ARMAZEM já lista, filtra e escreve (com confirmação), no mesmo espírito do app.
 
+## Controle remoto da U1
+
+Abra **Controle** na Fábrica. A versão inclui:
+
+- **Impressão** com lista de até 24 G-codes, início com confirmação e ações
+  de pausa, retomada e cancelamento do arquivo exibido.
+- **Filamento** com presença, material e rolo por cabeçote. Carregar e
+  retirar usam `AUTO_FEEDING` e aguardam o estado final do alimentador.
+- **Movimento** com referência XYZ, deslocamentos curtos dentro dos
+  limites informados pela U1 e desligamento dos motores.
+- **Temperatura** com predefinições para mesa e bicos, seleção de
+  cabeçote, desligamento de aquecedores e controle da ventoinha da peça.
+- **Calibração** com malha da mesa, compensação de vibração e offsets
+  dos quatro cabeçotes. A calibração de offsets requer XYZ referenciado.
+- **Parada de emergência** pelo endpoint dedicado do Moonraker, em uma
+  tarefa separada da fila de operações. Depende da conectividade.
+
+O painel verifica o estado real da U1 antes de enviar comandos. Se
+alguma resposta expirar, confira a U1 antes de repetir. Rotinas de fluxo
+dependentes da tarefa e do material continuam na interface da impressora.
+
 ## PN532 V3 em HSU
 
 1. Coloque os dois DIP do PN532 em OFF e selecione UART2 na chave da Waveshare.

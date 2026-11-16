@@ -14,6 +14,7 @@
 #include <ArduinoJson.h>
 #include <esp_heap_caps.h>
 #include <atomic>
+#include "control.h"
 #include <string.h>
 #include <strings.h>
 #include <stdio.h>
@@ -40,6 +41,10 @@ static char p_uid[24];
 static std::atomic<bool> nfc_auto_cancelled{false};
 static int nfc_auto_id;
 static char nfc_auto_uid[24];
+static ControlOp control_op;
+static int control_value;
+static char control_path[192];
+static ControlFiles control_files;
 static char p_identity[160];
 static CreateSpoolReq p_create;
 
@@ -88,7 +93,7 @@ static int http_do(const char *url, const char *method, const char *payload,
     HTTPClient http;
     int t = timeout_ms > 0 ? timeout_ms : 8000;
     http.setConnectTimeout(t > 8000 ? 8000 : t);
-    http.setTimeout(t);
+    http.setTimeout(t > 60000 ? 60000 : t);
     http.setReuse(false);
     if (!http.begin(url)) return -1;
     if (payload) http.addHeader("Content-Type", "application/json");
@@ -236,7 +241,7 @@ static bool parse_feeder_fresh(FeederInfo *f, char *err, size_t errn, const char
                                uint16_t port, int uid_channel = -1, char *uid = nullptr) {
     int len = 0;
     if (!u1_get(ip, port,
-                "/printer/objects/query?filament_feed%20left&filament_feed%20right&filament_detect&print_task_config&print_stats&webhooks",
+                "/printer/objects/query?filament_feed%20left&filament_feed%20right&filament_detect&print_task_config&print_stats&webhooks&idle_timeout",
                 4000, &len, err, errn))
         return false;
     JsonDocument doc;
@@ -286,6 +291,8 @@ static bool parse_feeder_fresh(FeederInfo *f, char *err, size_t errn, const char
     const char *ps = "";
     if (st["print_stats"].is<JsonObject>()) ps = st["print_stats"]["state"] | "";
     f->busy_print = (strcasecmp(ps, "printing") == 0 || strcasecmp(ps, "paused") == 0);
+    const char *idle_state = st["idle_timeout"]["state"] | "";
+    f->busy_motion = !strcmp(idle_state, "Printing");
     f->valid = got > 0;
     if (uid) {
         uid[0] = 0;
@@ -314,6 +321,7 @@ static bool idle_for_manual(const FeederInfo *f, char *err, size_t errn, bool al
     /* allow_print: associar rolo é só metadado (spoollink), pode ocorrer durante a impressão.
      * Carga/descarga física continua bloqueada. */
     if (f->busy_print && !allow_print) { cpy(err, errn, "Troca manual indisponivel durante impressao ou pausa."); return false; }
+    if (f->busy_motion && !allow_print) { cpy(err, errn, "Aguarde o movimento atual da U1 terminar."); return false; }
     for (int i = 0; i < 4; i++) {
         if (!f->ch[i].module_exist) {
             snprintf(err, errn, "Feeder %d indisponivel", i + 1);
@@ -1227,7 +1235,6 @@ static void do_feed(int ch, bool load) {
     char err[200] = {0};
     if (ch < 0 || ch > 3) { act_set(AR_ERR, "Feeder invalido."); return; }
     if (!endpoint(ip, &port)) { act_set(AR_ERR, "U1 nao encontrada"); return; }
-    if (!require_external(ip, port, err, sizeof(err))) { act_set(AR_ERR, err); return; }
     FeederInfo f{};
     if (!parse_feeder_fresh(&f, err, sizeof(err), ip, port)) { act_set(AR_ERR, err); return; }
     if (!idle_for_manual(&f, err, sizeof(err), false)) { act_set(AR_ERR, err); return; }
@@ -1253,15 +1260,175 @@ static void do_feed(int ch, bool load) {
     char bj[80];
     serializeJson(body, bj, sizeof(bj));
     int len = 0;
-    if (!u1_post(ip, port, "/printer/gcode/script", bj, 240000, &len, err, sizeof(err))) {
-        act_set(AR_ERR, err);
-        history_add(err);
+    const char *expected = load ? "load_finish" : "unload_finish";
+    if (!strcmp(f.ch[ch].channel_state, expected)) {
+        act_set(AR_OK, load ? "A U1 ja informa carga concluida." : "A U1 ja informa retirada concluida.");
         return;
     }
-    char h[120];
-    snprintf(h, sizeof(h), "%s no feeder %d", load ? "Carregamento" : "Retirada", ch + 1);
-    history_add(h);
-    act_set(AR_OK, h);
+    u1_post(ip, port, "/printer/gcode/script", bj, 60000, &len, err, sizeof(err));
+    const uint32_t started = millis();
+    while (millis() - started < 90000) {
+        if (parse_feeder_fresh(&f, err, sizeof(err), ip, port)) {
+            const FeederChannel &channel = f.ch[ch];
+            if (!strcmp(channel.channel_state, expected) && !strcmp(channel.channel_error, "ok")) {
+                char message[112];
+                snprintf(message, sizeof(message), "%s confirmada no alimentador %d.",
+                         load ? "Carga" : "Retirada", ch + 1);
+                history_add(message);
+                act_set(AR_OK, message);
+                return;
+            }
+            if (strstr(channel.channel_state, "_fail") || strcmp(channel.channel_error, "ok")) {
+                act_set(AR_ERR, "A U1 reportou uma falha no alimentador."); return;
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+    act_set(AR_ERR, "Alimentacao sem confirmacao. Confira o alimentador na U1.");
+}
+
+static bool control_reply(int len) {
+    JsonDocument reply;
+    return len > 0 && !deserializeJson(reply, http_buf, len) &&
+           !reply["result"].isNull() && reply["error"].isNull();
+}
+
+static void control_list(const char *ip, uint16_t port) {
+    char err[128]{};
+    int len = 0;
+    ControlFiles files{};
+    JsonDocument doc;
+    if (!u1_get(ip, port, "/server/files/list?root=gcodes", 6000, &len, err, sizeof(err)) ||
+        deserializeJson(doc, http_buf, len) || !doc["result"].is<JsonArray>()) {
+        act_set(AR_ERR, err[0] ? err : "Lista de arquivos indisponivel."); return;
+    }
+    for (JsonObject entry : doc["result"].as<JsonArray>()) {
+        const char *path = entry["path"] | "";
+        const size_t size = strlen(path);
+        if (size < 7 || strcasecmp(path + size - 6, ".gcode")) continue;
+        if (size >= sizeof(files.paths[0]) || files.count == ControlFiles::limit) {
+            files.more = true;
+            continue;
+        }
+        cpy(files.paths[files.count++], sizeof(files.paths[0]), path);
+    }
+    xSemaphoreTake(mutex, portMAX_DELAY);
+    files.version = control_files.version + 1;
+    control_files = files;
+    xSemaphoreGive(mutex);
+    act_set(AR_OK, files.count ? "Arquivos atualizados." : "Nenhum G-code na U1.");
+}
+
+static void do_control() {
+    char ip[16]{}, err[160]{};
+    uint16_t port = 7125;
+    if (!endpoint(ip, &port)) { act_set(AR_ERR, "U1 nao encontrada."); return; }
+    const ControlOp op = control_op;
+    if (op == ControlOp::Files) { control_list(ip, port); return; }
+    int len = 0;
+    JsonDocument status;
+    if (!u1_get(ip, port,
+                "/printer/objects/query?print_stats=state,filename&idle_timeout=state&webhooks=state&toolhead=homed_axes,position,axis_minimum,axis_maximum",
+                4000, &len, err, sizeof(err)) || deserializeJson(status, http_buf, len)) {
+        act_set(AR_ERR, err[0] ? err : "Estado atual da U1 indisponivel."); return;
+    }
+    JsonObject st = status["result"]["status"].as<JsonObject>();
+    const char *job = st["print_stats"]["state"] | "";
+    const char *idle = st["idle_timeout"]["state"] | "";
+    const char *ready = st["webhooks"]["state"] | "";
+    const char *homed = st["toolhead"]["homed_axes"] | "";
+    const bool printing = !strcmp(job, "printing");
+    const bool paused = !strcmp(job, "paused");
+    const bool idle_job = !strcmp(job, "standby") || !strcmp(job, "complete") ||
+                          !strcmp(job, "cancelled");
+    if (strcmp(ready, "ready") || !*job) { act_set(AR_ERR, "U1 indisponivel."); return; }
+
+    const char *route = "/printer/gcode/script";
+    JsonDocument body;
+    char script[220]{}, payload[300]{};
+    int wait_ms = 12000;
+    if (op == ControlOp::Pause || op == ControlOp::Resume || op == ControlOp::Cancel) {
+        const char *current_file = st["print_stats"]["filename"] | "";
+        if (!control_path[0] || strcmp(current_file, control_path) ||
+            (op == ControlOp::Pause && !printing) ||
+            (op == ControlOp::Resume && !paused) ||
+            (op == ControlOp::Cancel && !printing && !paused)) {
+            act_set(AR_ERR, "A impressao exibida mudou. Confira o estado da U1."); return;
+        }
+        route = op == ControlOp::Pause ? "/printer/print/pause" :
+                op == ControlOp::Resume ? "/printer/print/resume" : "/printer/print/cancel";
+    } else {
+        if (!idle_job || (strcmp(idle, "Idle") && strcmp(idle, "Ready"))) {
+            act_set(AR_ERR, "Aguarde a impressora ficar ociosa."); return;
+        }
+        switch (op) {
+        case ControlOp::Start:
+            if (!control_path[0]) { act_set(AR_ERR, "Selecione um arquivo."); return; }
+            route = "/printer/print/start";
+            body["filename"] = control_path;
+            break;
+        case ControlOp::Home: strcpy(script, "G28\nM400"); wait_ms = 60000; break;
+        case ControlOp::Cool: strcpy(script, "TURN_OFF_HEATERS"); break;
+        case ControlOp::FanOff: strcpy(script, "M107"); break;
+        case ControlOp::FanHalf: strcpy(script, "M106 S128"); break;
+        case ControlOp::FanFull: strcpy(script, "M106 S255"); break;
+        case ControlOp::MotorsOff: strcpy(script, "M84"); break;
+        case ControlOp::SelectTool:
+            if (control_value < 0 || control_value > 3 || strcmp(homed, "xyz")) {
+                act_set(AR_ERR, "Referencie XYZ antes de trocar de cabecote."); return;
+            }
+            snprintf(script, sizeof(script), "T%d\nM400", control_value);
+            wait_ms = 60000;
+            break;
+        case ControlOp::Mesh: strcpy(script, "G28\nBED_MESH_CALIBRATE\nM400"); wait_ms = 60000; break;
+        case ControlOp::Shaper: strcpy(script, "G28\nSHAPER_CALIBRATE\nM400"); wait_ms = 60000; break;
+        case ControlOp::Offsets:
+            if (strcmp(homed, "xyz")) { act_set(AR_ERR, "Referencie XYZ antes de calibrar offsets."); return; }
+            strcpy(script, "XYZ_OFFSET_CALIBRATE_ALL\nM400"); wait_ms = 60000; break;
+        case ControlOp::Bed55: case ControlOp::Bed75:
+            snprintf(script, sizeof(script), "SET_HEATER_TEMPERATURE HEATER=heater_bed TARGET=%d",
+                     op == ControlOp::Bed55 ? 55 : 75);
+            break;
+        case ControlOp::Nozzle200: case ControlOp::Nozzle235: {
+            if (control_value < 0 || control_value > 3) { act_set(AR_ERR, "Cabecote invalido."); return; }
+            const char *heaters[] = {"extruder", "extruder1", "extruder2", "extruder3"};
+            snprintf(script, sizeof(script), "SET_HEATER_TEMPERATURE HEATER=%s TARGET=%d",
+                     heaters[control_value], op == ControlOp::Nozzle200 ? 200 : 235);
+            break;
+        }
+        default: {
+            const int step = static_cast<int>(op) - static_cast<int>(ControlOp::XMinus);
+            if (step < 0 || step > 5 || strcmp(homed, "xyz")) {
+                act_set(AR_ERR, "Referencie XYZ antes de mover."); return;
+            }
+            const int axis = step / 2;
+            const float increment = (step % 2 ? 1 : -1) * (axis == 2 ? 1.0f : 5.0f);
+            JsonObject tool = st["toolhead"].as<JsonObject>();
+            const float position = tool["position"][axis] | NAN;
+            const float lower = tool["axis_minimum"][axis] | NAN;
+            const float upper = tool["axis_maximum"][axis] | NAN;
+            if (!isfinite(position) || !isfinite(lower) || !isfinite(upper) ||
+                position + increment < lower || position + increment > upper) {
+                act_set(AR_ERR, "Movimento excede o limite reportado pela U1."); return;
+            }
+            snprintf(script, sizeof(script),
+                     "SAVE_GCODE_STATE NAME=ws_jog\nG91\nG1 %c%.0f F%d\nM400\nRESTORE_GCODE_STATE NAME=ws_jog MOVE=0",
+                     "XYZ"[axis], static_cast<double>(increment), axis == 2 ? 240 : 1500);
+            break;
+        }
+        }
+    }
+    if (script[0]) body["script"] = script;
+    serializeJson(body, payload, sizeof(payload));
+    if (!u1_post(ip, port, route, payload, wait_ms, &len, err, sizeof(err)) ||
+        !control_reply(len)) {
+        act_set(AR_ERR, "Sem confirmacao da U1. Verifique o estado antes de repetir.");
+        return;
+    }
+    const char *message = script[0] && wait_ms == 60000
+        ? "A U1 respondeu ao fim da rotina." : "Comando aceito pela U1.";
+    history_add(message);
+    act_set(AR_OK, message);
 }
 
 /* ---- task e API ---- */
@@ -1276,6 +1443,7 @@ static void run_kind(ActKind k) {
     case ACT_DELETE:  do_delete(p_id, p_identity); break;
     case ACT_ASSIGN:  do_assign(p_channel, p_id); break;
     case ACT_NFC_AUTO: do_nfc_auto(nfc_auto_id, nfc_auto_uid); break;
+    case ACT_CONTROL: do_control(); break;
     case ACT_LOAD:    do_feed(p_channel, true); break;
     case ACT_UNLOAD:  do_feed(p_channel, false); break;
     default: act_set(AR_IDLE, ""); break;
@@ -1303,7 +1471,7 @@ static void inv_task(void *) {
 
 static void enqueue(ActKind k) {
     xSemaphoreTake(mutex, portMAX_DELAY);
-    if (g_act.kind == ACT_NFC_AUTO && g_act.state == AR_RUNNING) {
+    if ((g_act.kind == ACT_NFC_AUTO || g_act.kind == ACT_CONTROL) && g_act.state == AR_RUNNING) {
         xSemaphoreGive(mutex);
         return;
     }
@@ -1416,6 +1584,31 @@ bool inventory_request_nfc_auto(int spool_id, const char *uid) {
 }
 
 void inventory_cancel_nfc_auto(void) { nfc_auto_cancelled = true; }
+
+bool control_submit(ControlOp op, int value, const char *path) {
+    if (!mutex || !task_h || (path && strlen(path) >= sizeof(control_path))) return false;
+    xSemaphoreTake(mutex, portMAX_DELAY);
+    const bool available = g_act.state != AR_RUNNING && pending == ACT_NONE;
+    if (available) {
+        control_op = op;
+        control_value = value;
+        cpy(control_path, sizeof(control_path), path);
+        pending = g_act.kind = ACT_CONTROL;
+        g_act.state = AR_RUNNING;
+        g_act.message[0] = 0;
+        g_act.seq = ++act_seq;
+    }
+    xSemaphoreGive(mutex);
+    if (available) xTaskNotifyGive(task_h);
+    return available;
+}
+
+void control_copy_files(ControlFiles &out) {
+    if (!mutex) return;
+    xSemaphoreTake(mutex, portMAX_DELAY);
+    out = control_files;
+    xSemaphoreGive(mutex);
+}
 
 void inventory_request_feed(int channel, bool load) {
     xSemaphoreTake(mutex, portMAX_DELAY);

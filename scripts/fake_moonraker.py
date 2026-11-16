@@ -9,6 +9,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 SCENARIO = "printing"
 SPOOL_ID = 40
+REMOTE_FILES = ("controle/teste.gcode",)
+REMOTE_JOB = None
 
 def objects(scenario: str) -> dict:
     base = {
@@ -22,6 +24,8 @@ def objects(scenario: str) -> dict:
         "extruder": {"temperature": 24.0, "target": 0.0},
         "heater_bed": {"temperature": 24.0, "target": 0.0},
         "idle_timeout": {"state": "Idle"},
+        "toolhead": {"homed_axes": "xyz", "position": [20, 20, 20, 0],
+                     "axis_minimum": [0, 0, 0, 0], "axis_maximum": [270, 270, 270, 0]},
         "filament_feed left": {
             "extruder0": {"module_exist": True, "filament_detected": True,
                           "channel_state": "wait_insert", "channel_error": "ok", "disable_auto": False},
@@ -60,7 +64,7 @@ def objects(scenario: str) -> dict:
         base["idle_timeout"]["state"] = "Printing"
     elif scenario == "paused":
         objects_p = objects("printing")
-        objects_p["status"]["print_stats"]["state"] = "paused"
+        objects_p["result"]["status"]["print_stats"]["state"] = "paused"
         return objects_p
     elif scenario == "complete":
         base["print_stats"].update(state="complete", filename="benchy.gcode",
@@ -143,7 +147,12 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/printer/info":
             return self._json({"result": {"state": "ready", "hostname": "lava"}})
         if path == "/printer/objects/query":
-            return self._json(objects(SCENARIO))
+            obj = objects(SCENARIO)
+            if REMOTE_JOB is not None:
+                obj["result"]["status"]["print_stats"]["filename"] = REMOTE_JOB
+            return self._json(obj)
+        if path == "/server/files/list":
+            return self._json({"result": [{"path": name, "size": 1024} for name in REMOTE_FILES]})
         if path == "/server/spoolman/status":
             return self._json({"result": {
                 "spoolman_connected": True,
@@ -155,6 +164,7 @@ class Handler(BaseHTTPRequestHandler):
         self._json({"error": "not found"}, 404)
 
     def do_POST(self):
+        global SCENARIO, REMOTE_JOB
         path = self.path.split("?", 1)[0]
         n = int(self.headers.get("Content-Length", "0") or 0)
         raw = self.rfile.read(n) if n else b"{}"
@@ -162,6 +172,26 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(raw.decode() or "{}")
         except json.JSONDecodeError:
             return self._json({"error": "bad json"}, 400)
+        if path == "/printer/print/start":
+            filename = body.get("filename")
+            if SCENARIO in ("heating", "printing", "paused") or filename not in REMOTE_FILES:
+                return self._json({"error": "cannot start"}, 409)
+            REMOTE_JOB, SCENARIO = filename, "printing"
+            return self._json({"result": "ok"})
+        job_actions = {
+            "/printer/print/pause": (("heating", "printing"), "paused"),
+            "/printer/print/resume": (("paused",), "printing"),
+            "/printer/print/cancel": (("heating", "printing", "paused"), "idle"),
+        }
+        if path in job_actions:
+            allowed, next_state = job_actions[path]
+            if SCENARIO not in allowed:
+                return self._json({"error": "incorrect state"}, 409)
+            SCENARIO = next_state
+            return self._json({"result": "ok"})
+        if path == "/printer/emergency_stop":
+            SCENARIO = "error"
+            return self._json({"result": "ok"})
         if path == "/printer/spoollink/set":
             global LAST_SPOOLINK
             LAST_SPOOLINK = body
