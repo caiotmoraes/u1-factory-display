@@ -139,10 +139,12 @@ extern "C" {
  *
  * @param lcd The pointer to the LCD panel device, mustn't be nullptr
  * @param tp  The pointer to the touch panel device, set to nullptr if is not used
+ * @param backlight Optional backlight to turn off after touch inactivity
  *
  * @return true if success, otherwise false
  */
-bool lvgl_port_init(esp_panel::drivers::LCD *lcd, esp_panel::drivers::Touch *tp);
+bool lvgl_port_init(esp_panel::drivers::LCD *lcd, esp_panel::drivers::Touch *tp,
+                    esp_panel::drivers::Backlight *backlight = nullptr);
 
 /**
  * @brief Deinitialize the LVGL porting.

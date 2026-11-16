@@ -642,23 +642,44 @@ static lv_disp_t *display_init(LCD *lcd)
 
 static SemaphoreHandle_t touch_detected;
 
+static constexpr uint32_t BACKLIGHT_IDLE_MS = 5 * 60 * 1000;
+static Backlight *touch_backlight;
+static uint32_t last_touch_tick;
+static bool backlight_asleep;
+static bool ignore_wake_touch;
+
 static void touchpad_read(lv_indev_drv_t *indev_drv, lv_indev_data_t *data)
 {
     Touch *tp = (Touch *)indev_drv->user_data;
-    TouchPoint point;
     data->state = LV_INDEV_STATE_RELEASED;
 
-    /* if we are interrupt driven wait for the ISR to fire */
-    if ( tp->isInterruptEnabled() && (xSemaphoreTake( touch_detected, 0 ) == pdFALSE) ) {
-        return;
+    const bool read_touch = !tp->isInterruptEnabled() ||
+                            xSemaphoreTake(touch_detected, 0) == pdTRUE;
+    if (read_touch || ignore_wake_touch) {
+        TouchPoint point;
+        const int count = tp->readPoints(&point, 1, 0);
+        if (count > 0) {
+            last_touch_tick = lv_tick_get();
+            if (backlight_asleep) {
+                backlight_asleep = !touch_backlight->on();
+                ignore_wake_touch = true;
+            }
+            if (!ignore_wake_touch) {
+                data->point.x = point.x;
+                data->point.y = point.y;
+                data->state = LV_INDEV_STATE_PRESSED;
+            }
+            return;
+        }
+        if (count == 0) {
+            ignore_wake_touch = false;
+        }
     }
 
-    /* Read data from touch controller */
-    int read_touch_result = tp->readPoints(&point, 1, 0);
-    if (read_touch_result > 0) {
-        data->point.x = point.x;
-        data->point.y = point.y;
-        data->state = LV_INDEV_STATE_PRESSED;
+    if (touch_backlight && !backlight_asleep &&
+        lv_tick_elaps(last_touch_tick) >= BACKLIGHT_IDLE_MS) {
+        backlight_asleep = touch_backlight->off();
+        last_touch_tick = lv_tick_get();
     }
 }
 
@@ -755,7 +776,7 @@ IRAM_ATTR bool onDrawBitmapFinishCallback(void *user_data)
     return false;
 }
 
-bool lvgl_port_init(LCD *lcd, Touch *tp)
+bool lvgl_port_init(LCD *lcd, Touch *tp, Backlight *backlight)
 {
     ESP_UTILS_CHECK_FALSE_RETURN(lcd != nullptr, false, "Invalid LCD device");
 
@@ -791,6 +812,10 @@ bool lvgl_port_init(LCD *lcd, Touch *tp)
     }
 
     if (tp != nullptr) {
+        touch_backlight = backlight;
+        last_touch_tick = lv_tick_get();
+        backlight_asleep = false;
+        ignore_wake_touch = false;
         ESP_UTILS_LOGD("Initialize LVGL input driver");
         indev = indev_init(tp);
         ESP_UTILS_CHECK_NULL_RETURN(indev, false, "Initialize LVGL input driver failed");

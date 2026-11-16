@@ -27,7 +27,7 @@ void setup() {
     }
 
     Serial.println("[lvgl] init");
-    lvgl_port_init(board->getLCD(), board->getTouch());
+    lvgl_port_init(board->getLCD(), board->getTouch(), board->getBacklight());
 
     history_init();
     nfc_init();
