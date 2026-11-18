@@ -15,12 +15,12 @@ para o ciclo da impressão.
 
 ## Ecossistema / Ecosystem
 
-A tela e o app Android formam um par: mesmos fluxos, textos (`spec/strings.json`, pt e en) e formato canônico de `card_uids` (`"A,B"` em hex maiúsculo). Versões compatíveis: **display v0.7.0 ↔ app 2.0.0**.
+A tela e o app Android formam um par: mesmos fluxos, textos (`spec/strings.json`, pt e en) e formato canônico de `card_uids` (`"A,B"` em hex maiúsculo). Versões compatíveis: **display v0.7.1 ↔ app 2.0.3**.
 
 - Este repositório: firmware do painel Waveshare ESP32-S3 (Wi-Fi + leitor PN532).
 - App complementar: [Spool Factory](https://github.com/caiotmoraes/spool-factory) — Android, NFC do celular, as mesmas 5 abas.
 
-The display and the Android app are a pair: same flows, copy (`spec/strings.json`, pt and en) and canonical `card_uids` format (`"A,B"`, uppercase hex). Compatible versions: **display v0.7.0 ↔ app 2.0.0**.
+The display and the Android app are a pair: same flows, copy (`spec/strings.json`, pt and en) and canonical `card_uids` format (`"A,B"`, uppercase hex). Compatible versions: **display v0.7.1 ↔ app 2.0.3**.
 
 - This repo: Waveshare ESP32-S3 panel firmware (Wi-Fi + PN532 reader).
 - Companion app: [Spool Factory](https://github.com/caiotmoraes/spool-factory) — Android, phone NFC, the same five tabs.
@@ -28,7 +28,7 @@ The display and the Android app are a pair: same flows, copy (`spec/strings.json
 ```mermaid
 flowchart LR
   U1["U1<br/>Klipper / Moonraker :7125<br/>+ proxy Spoolman + SpoolLink"]
-  D["U1 Factory Display v0.7.0<br/>ESP32-S3 · Wi-Fi · PN532 NFC"]
+  D["U1 Factory Display v0.7.1<br/>ESP32-S3 · Wi-Fi · PN532 NFC"]
   A["Spool Factory 2.0.0<br/>Android · NFC do celular"]
   S["spec/ compartilhada<br/>strings.json<br/>card_uids formato A,B"]
   D --> U1
@@ -59,7 +59,7 @@ ESP32_IO_Expander 1.1.0, esp-lib-utils 0.2.0, LVGL 8.4.0, ArduinoJson 7.
 Macros da placa: `-DESP_PANEL_BOARD_DEFAULT_USE_SUPPORTED=1
 -DBOARD_WAVESHARE_ESP32_S3_TOUCH_LCD_7`. CDC nativo no boot ligado e UART0 reservada ao PN532. O CH343 continua sendo a porta de gravação.
 
-## O que esta versão faz (v0.7.1) — vínculo extrusor → rolo no fluxo NFC
+## O que esta versão faz (v0.7.1) — vínculo extrusor → rolo (NFC e manual)
 
 Correção do teste de 18/11/2026 (ler tag > inserir): o rolo aparecia na tela da
 U1, mas `print_task_config.filament_spool_id` ficava 0 e o Spoolman não recebia
@@ -74,7 +74,15 @@ alimentador, o firmware agora:
 2. Confirma `filament_spool_id[ch] == id` (4 leituras seguidas, até 20 s).
 3. `PATCH /v1/spool/<id>` `{"location":"Snapmaker U1 - Extrusor N"}` pelo proxy
    Spoolman do Moonraker (N = 1..4) e confere o local salvo.
-4. Mostra sucesso ou o erro exato na tela e no Diário (nada falha calado).
+4. O rolo anterior desse extrusor (local exatamente `Snapmaker U1 - Extrusor N`,
+   outro id) vai para o local `Armazém`; locais personalizados não são tocados.
+5. Mostra sucesso ou o erro exato na tela e no Diário (nada falha calado).
+
+A mesma rotina roda no **Ativar no alimentador** (associação manual): depois do
+`/printer/spoollink/set` (tipo/cor/marca no canal), manda `SET_SPOOL_ID`, confere,
+grava o local e libera o rolo anterior. Se a resposta do `SET_SPOOL_ID` se perder
+(timeout), não repete: confere `filament_spool_id` e só falha se não confirmar.
+Compatível com **Spool Factory 2.0.3**.
 
 ## O que esta versão faz (v0.7.0) — unificação com o Spool Factory 2.0
 Tela e app Android seguem a mesma especificação, **U1 Spool Spec v1** (pasta `spec/`, idêntica nos dois repositórios).

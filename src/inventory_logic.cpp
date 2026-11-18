@@ -471,3 +471,21 @@ bool spool_location_patch_json(const char *location, char *out, size_t n) {
     out[k] = 0;
     return true;
 }
+
+bool spool_channel_location_query(int channel, char *out, size_t n) {
+    if (!out || n == 0) return false;
+    out[0] = 0;
+    char loc[SPOOL_LOCATION_LEN], enc[SPOOL_LOCATION_LEN * 3 + 1];
+    if (!spool_u1_location(channel, loc, sizeof(loc)) || !url_encode_component(loc, enc, sizeof(enc)))
+        return false;
+    int w = snprintf(out, n, "/v1/spool?location=%s", enc);
+    if (w < 0 || (size_t)w >= n) { out[0] = 0; return false; }
+    return true;
+}
+
+bool spool_should_release(int spool_id, const char *location, int channel, int new_id) {
+    char loc[SPOOL_LOCATION_LEN];
+    if (spool_id <= 0 || spool_id == new_id || !location) return false;
+    if (!spool_u1_location(channel, loc, sizeof(loc))) return false;
+    return strcmp(location, loc) == 0;
+}

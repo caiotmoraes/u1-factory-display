@@ -395,6 +395,24 @@ int main(void) {
         ok("mr-html", moonraker_error_message("<html>502</html>", 16, e, sizeof(e)) && e[0]);
     }
 
+    /* ---- Rolo anterior do extrusor vai para o Armazém ---- */
+    {
+        char q[256], e[160];
+        ok("loc-query-T2", spool_channel_location_query(1, q, sizeof(q)) &&
+                           !strcmp(q, "/v1/spool?location=Snapmaker%20U1%20-%20Extrusor%202"));
+        ok("loc-query-canal-4", !spool_channel_location_query(4, q, sizeof(q)));
+        ok("loc-query-buf", !spool_channel_location_query(1, q, 20) && !q[0]);
+        ok("release-anterior", spool_should_release(12, "Snapmaker U1 - Extrusor 2", 1, 15));
+        ok("release-novo-nao", !spool_should_release(15, "Snapmaker U1 - Extrusor 2", 1, 15));
+        ok("release-outro-canal", !spool_should_release(12, "Snapmaker U1 - Extrusor 3", 1, 15));
+        ok("release-parcial-nao", !spool_should_release(12, "Snapmaker U1 - Extrusor 2 (seco)", 1, 15));
+        ok("release-caixa-nao", !spool_should_release(12, "snapmaker u1 - extrusor 2", 1, 15));
+        ok("release-id0", !spool_should_release(0, "Snapmaker U1 - Extrusor 2", 1, 15));
+        ok("release-null", !spool_should_release(12, nullptr, 1, 15));
+        ok("stored-json", spool_location_patch_json(SPOOL_STORED_LOCATION, e, sizeof(e)) &&
+                          !strcmp(e, "{\"location\":\"Armaz\xc3\xa9m\"}"));
+    }
+
     printf(fails ? "\n%d FALHA(S)\n" : "\nTodos os testes de spool/filtro passaram.\n", fails);
     return fails ? 1 : 0;
 }

@@ -38,11 +38,13 @@ def link_requests(ch, sid):
     exe = os.environ.get("LINK_REQUEST")
     if exe and os.path.exists(exe):
         out = subprocess.check_output([exe, str(ch), str(sid)], text=True).splitlines()
-        return out[0], out[1], out[2]
+        return tuple(out[:5])
     script = f"SET_SPOOL_ID CHANNEL={ch} SPOOL_ID={sid}"
+    loc = f"Snapmaker U1 - Extrusor {ch + 1}"
     return ("/printer/gcode/script?script=" + urllib.parse.quote(script, safe=""),
-            f"/v1/spool/{sid}", json.dumps({"location": f"Snapmaker U1 - Extrusor {ch + 1}"},
-                                           separators=(",", ":")))
+            f"/v1/spool/{sid}", json.dumps({"location": loc}, separators=(",", ":")),
+            "/v1/spool?location=" + urllib.parse.quote(loc, safe=""),
+            json.dumps({"location": "Armazém"}, separators=(",", ":"), ensure_ascii=False))
 
 def check_set_spool_link():
     """Bug 2026-11-18: ler NFC > inserir no T2 não gravava filament_spool_id nem o local."""
@@ -56,7 +58,7 @@ def check_set_spool_link():
     ids = get("/printer/objects/query?print_task_config")["result"]["status"]["print_task_config"]["filament_spool_id"]
     assert ids == [40, 0, 0, 0], ids
     # 2) SET_SPOOL_ID exato, canal 0-based, na query string
-    gpath, ppath, pbody = link_requests(1, 41)
+    gpath, ppath, pbody, _, _ = link_requests(1, 41)
     assert gpath == "/printer/gcode/script?script=SET_SPOOL_ID%20CHANNEL%3D1%20SPOOL_ID%3D41", gpath
     code, r = post_raw(gpath)
     assert code == 200 and r.get("result") == "ok", (code, r)
@@ -65,7 +67,7 @@ def check_set_spool_link():
     ids = get("/printer/objects/query?print_task_config")["result"]["status"]["print_task_config"]["filament_spool_id"]
     assert ids == [40, 41, 0, 0], ids
     # T4 = CHANNEL=3
-    g4, _, b4 = link_requests(3, 40)
+    g4, _, b4, _, _ = link_requests(3, 40)
     assert g4.endswith("SET_SPOOL_ID%20CHANNEL%3D3%20SPOOL_ID%3D40"), g4
     assert json.loads(b4) == {"location": "Snapmaker U1 - Extrusor 4"}, b4
     # 3) PATCH do local pelo proxy, corpo exato
@@ -88,6 +90,34 @@ def check_set_spool_link():
                                          "use_v2_response": True, "body": pbody})
     assert pr["result"]["response"] is None and pr["result"]["error"]["message"] == "Spoolman offline", pr
     cfg(fail_spoolman_patch="", detected=[None, None, None, None], spool_ids=[40, 0, 0, 0])
+
+def proxy(method, path, body=None):
+    req = {"request_method": method, "path": path, "use_v2_response": True}
+    if body is not None:
+        req["body"] = body
+    return post("/server/spoolman/proxy", req)["result"]
+
+def check_release_previous():
+    """Troca no T2: o rolo que marcava "Snapmaker U1 - Extrusor 2" vai para o Armazém.
+    Mesma sequência do link_channel() (firmware) e do App 2.0.3."""
+    _, ppath, pbody, qpath, stored = link_requests(1, 41)
+    assert qpath == "/v1/spool?location=Snapmaker%20U1%20-%20Extrusor%202", qpath
+    assert json.loads(stored) == {"location": "Armazém"}, stored
+    # antes: #40 no T2 (anterior), #42 com local personalizado parecido
+    proxy("PATCH", "/v1/spool/40", {"location": "Snapmaker U1 - Extrusor 2"})
+    proxy("PATCH", "/v1/spool/42", {"location": "Snapmaker U1 - Extrusor 2 (seco)"})
+    proxy("PATCH", ppath, json.loads(pbody))           # novo #41 no T2
+    rows = proxy("GET", qpath)["response"]
+    loc = "Snapmaker U1 - Extrusor 2"
+    # filtro do Spoolman é parcial: o exato fica no cliente
+    assert {r["id"] for r in rows} >= {40, 41, 42}, [r["id"] for r in rows]
+    release = [r["id"] for r in rows if r["id"] != 41 and r.get("location") == loc]
+    assert release == [40], release
+    for sid in release:
+        r = proxy("PATCH", f"/v1/spool/{sid}", json.loads(stored))
+        assert r["response"]["location"] == "Armazém", r
+    after = {r["id"]: r["location"] for r in proxy("GET", "/v1/spool")["response"]}
+    assert after[40] == "Armazém" and after[41] == loc and after[42] == loc + " (seco)", after
 
 def main():
     proc = subprocess.Popen(
@@ -188,6 +218,7 @@ def main():
         assert gc.get("result") == "ok", gc
 
         check_set_spool_link()
+        check_release_previous()
 
         created = post("/server/spoolman/proxy", {
             "request_method": "POST", "path": "/v1/spool", "use_v2_response": True,

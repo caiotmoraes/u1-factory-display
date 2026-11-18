@@ -299,6 +299,18 @@
   "pt": "Associado ao T{ch}: {spool} · local salvo no Spoolman",
   "en": "Assigned to T{ch}: {spool} · location saved in Spoolman"
  },
+ "link.not_confirmed": {
+  "pt": "A U1 não confirmou o rolo #{id} no T{ch}. Confira o alimentador e tente de novo.",
+  "en": "The U1 did not confirm spool #{id} on T{ch}. Check the feeder and try again."
+ },
+ "link.previous_stored": {
+  "pt": "Rolo #{id} saiu do T{ch} · local: Armazém",
+  "en": "Spool #{id} left T{ch} · location: Armazém"
+ },
+ "link.previous_failed": {
+  "pt": "Não atualizei o local do rolo anterior do T{ch}: {msg}",
+  "en": "Could not update the previous T{ch} spool location: {msg}"
+ },
  "nfc.already_in": {
   "pt": "Este rolo já está no T{ch}.",
   "en": "This spool is already in T{ch}."

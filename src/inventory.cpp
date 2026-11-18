@@ -1098,6 +1098,9 @@ static bool get_spool_copy(int id, WarehouseSpool *out) {
     return ok;
 }
 
+static bool link_channel(const char *ip, uint16_t port, int ch, int id, const char *uid,
+                         const char *not_confirmed_fmt);
+
 static void do_assign(int ch, int spool_id) {
     char ip[16] = {0};
     uint16_t port = 7125;
@@ -1142,6 +1145,8 @@ static void do_assign(int ch, int spool_id) {
     char bj[640];
     serializeJson(body, bj, sizeof(bj));
     int len = 0;
+    /* spoollink/set só grava tipo/cor/marca no canal; o vínculo que desconta
+     * no Spoolman é o SET_SPOOL_ID (mesma rotina do NFC). */
     if (!u1_post(ip, port, "/printer/spoollink/set", bj, 8000, &len, err, sizeof(err))) {
         act_set(AR_ERR, err);
         history_add(err);
@@ -1150,7 +1155,7 @@ static void do_assign(int ch, int spool_id) {
     char h[140];
     snprintf(h, sizeof(h), S_ASSIGN_DONE, spool_id, ch + 1);
     history_add(h);
-    act_set(AR_OK, h, spool_id);
+    link_channel(ip, port, ch, spool_id, nullptr, S_LINK_NOT_CONFIRMED);
 }
 
 /* Spec v1: mesma leitura tolerante do parser (lista, texto, texto com lista). */
@@ -1213,56 +1218,206 @@ static bool preload_done(const FeederChannel &ch) {
 /* SET_SPOOL_ID CHANNEL=<0..3> SPOOL_ID=<id> no SpoolLink da U1.
  * Script na query string (?script=..., percent-encoded) e corpo vazio: o JSON
  * no corpo já falhou calado na U1 real (2026-11-18). Confere HTTP e o erro do
- * Moonraker no corpo. */
-static bool u1_set_spool_id(const char *ip, uint16_t port, int ch, int id,
-                            char *err, size_t errn) {
+ * Moonraker no corpo.
+ * Retorno: 1 aceito; 0 recusado (err); -1 resposta perdida (timeout/rede): o
+ * comando pode ter rodado, então quem chama confere filament_spool_id sem repetir. */
+static int u1_set_spool_id(const char *ip, uint16_t port, int ch, int id,
+                           char *err, size_t errn) {
     char script[64], enc[128], url[256];
     if (!spoollink_set_spool_script(ch, id, script, sizeof(script)) ||
         !url_encode_component(script, enc, sizeof(enc))) {
         cpy(err, errn, S_FEEDER_INVALID);
-        return false;
+        return 0;
     }
     snprintf(url, sizeof(url), "http://%s:%u/printer/gcode/script?script=%s", ip, port, enc);
     int len = 0;
-    const int code = http_post_url(url, nullptr, 8000, &len);
-    if (code < 0) { http_err_msg(code, err, errn); return false; }
+    const int code = http_post_url(url, nullptr, 10000, &len);
+    if (code == HTTPC_ERROR_READ_TIMEOUT || code == HTTP_TRUNCATED) {
+        http_err_msg(code, err, errn);
+        return -1;
+    }
+    if (code < 0) { http_err_msg(code, err, errn); return 0; }
     char m[160] = {0};
     const bool body_err = http_buf && moonraker_error_message(http_buf, (size_t)(len > 0 ? len : 0), m, sizeof(m));
     if (code < 200 || code >= 300) {
         if (body_err) cpy(err, errn, m);
         else snprintf(err, errn, "HTTP %d em /printer/gcode/script", code);
-        return false;
+        return 0;
     }
-    if (body_err) { cpy(err, errn, m); return false; }
-    return true;
+    if (body_err) { cpy(err, errn, m); return 0; }
+    return 1;
 }
 
-/* PATCH /v1/spool/{id} {"location":"Snapmaker U1 - Extrusor N"} pelo proxy
- * Spoolman do Moonraker e confere o local salvo na resposta. */
-static bool spoolman_set_u1_location(const char *ip, uint16_t port, int id, int ch,
-                                     char *err, size_t errn) {
-    char loc[SPOOL_LOCATION_LEN], body[SPOOL_LOCATION_LEN * 2 + 32], path[40];
-    if (!spool_u1_location(ch, loc, sizeof(loc)) ||
-        !spool_location_patch_json(loc, body, sizeof(body))) {
+/* PATCH /v1/spool/{id} {"location": loc} pelo proxy Spoolman do Moonraker e
+ * confere o local salvo na resposta. `out` (opcional) recebe o rolo salvo. */
+static bool spoolman_set_location(const char *ip, uint16_t port, int id, const char *loc,
+                                  WarehouseSpool *out, char *err, size_t errn) {
+    char body[SPOOL_LOCATION_LEN * 2 + 32], path[40];
+    if (!spool_location_patch_json(loc, body, sizeof(body))) {
         cpy(err, errn, S_FEEDER_INVALID);
         return false;
     }
     snprintf(path, sizeof(path), "/v1/spool/%d", id);
     int len = 0;
     if (!proxy(ip, port, "PATCH", path, body, 8000, &len, err, errn)) return false;
-    WarehouseSpool saved{};
-    if (!spool_parse_one(http_buf, (size_t)len, &saved, id, err, errn)) {
+    WarehouseSpool *saved = (WarehouseSpool *)psram_z(sizeof(WarehouseSpool));
+    if (!saved) { cpy(err, errn, "Sem memória"); return false; }
+    bool ok = spool_parse_one(http_buf, (size_t)len, saved, id, err, errn);
+    if (!ok) {
         if (!err[0]) cpy(err, errn, "resposta inválida do Spoolman");
+    } else if (strcmp(saved->location, loc) != 0) {
+        snprintf(err, errn, "local ficou \"%s\"", saved->location);
+        ok = false;
+    } else if (out) {
+        *out = *saved;
+    }
+    free(saved);
+    return ok;
+}
+
+/* "Snapmaker U1 - Extrusor N" no rolo vinculado. */
+static bool spoolman_set_u1_location(const char *ip, uint16_t port, int id, int ch,
+                                     char *err, size_t errn) {
+    char loc[SPOOL_LOCATION_LEN];
+    if (!spool_u1_location(ch, loc, sizeof(loc))) { cpy(err, errn, S_FEEDER_INVALID); return false; }
+    WarehouseSpool *saved = (WarehouseSpool *)psram_z(sizeof(WarehouseSpool));
+    if (!saved) { cpy(err, errn, "Sem memória"); return false; }
+    const bool ok = spoolman_set_location(ip, port, id, loc, saved, err, errn);
+    if (ok) {
+        xSemaphoreTake(mutex, portMAX_DELAY);
+        g_act.saved = *saved;
+        xSemaphoreGive(mutex);
+    }
+    free(saved);
+    return ok;
+}
+
+/* Rolo(s) que ainda marcam "Snapmaker U1 - Extrusor N" mas não são o novo:
+ * vão para "Armazém". Só mexe em quem tem exatamente o local desse extrusor
+ * (um local personalizado nunca é sobrescrito). Falha não desfaz o vínculo:
+ * vira aviso no Diário. Retorna quantos foram movidos, -1 em erro. */
+static int release_previous_location(const char *ip, uint16_t port, int ch, int new_id,
+                                     char *err, size_t errn) {
+    char path[SPOOL_LOCATION_LEN * 3 + 32];
+    /* Spoolman: `location` é busca parcial; o filtro exato é spool_should_release. */
+    if (!spool_channel_location_query(ch, path, sizeof(path))) {
+        cpy(err, errn, S_FEEDER_INVALID);
+        return -1;
+    }
+    int len = 0;
+    if (!proxy(ip, port, "GET", path, nullptr, 8000, &len, err, errn)) return -1;
+    JsonDocument filter(psram_json()), doc(psram_json()), fields(psram_json());
+    fields["id"] = true;
+    fields["location"] = true;
+    const char *json = http_buf;
+    while (isspace(static_cast<unsigned char>(*json))) ++json;
+    if (*json == '[') filter[0].set(fields.as<JsonObject>());
+    else {
+        filter["response"][0].set(fields.as<JsonObject>());
+        filter["result"]["response"][0].set(fields.as<JsonObject>());
+    }
+    JsonArray rows;
+    if (deserializeJson(doc, http_buf, len, DeserializationOption::Filter(filter)) ||
+        unwrap_array(doc, rows) < 0) {
+        cpy(err, errn, "Falha ao consultar os locais no Spoolman.");
+        return -1;
+    }
+    int ids[8], n = 0;
+    for (JsonObject row : rows) {
+        const int sid = row["id"] | 0;
+        const char *l = row["location"] | "";
+        if (spool_should_release(sid, l, ch, new_id) && n < 8) ids[n++] = sid;
+    }
+    int moved = 0;
+    for (int i = 0; i < n; ++i) {
+        char e[120] = {0};
+        if (!spoolman_set_location(ip, port, ids[i], SPOOL_STORED_LOCATION, nullptr, e, sizeof(e))) {
+            snprintf(err, errn, "#%d: %s", ids[i], e[0] ? e : "?");
+            return -1;
+        }
+        char h[96];
+        snprintf(h, sizeof(h), S_LINK_PREVIOUS_STORED, ids[i], ch + 1);
+        history_add(h);
+        ++moved;
+    }
+    return moved;
+}
+
+/* Rotina única de vínculo (NFC e "Ativar no alimentador"):
+ * SET_SPOOL_ID → confirma filament_spool_id[ch] == id (4 leituras seguidas, até
+ * 20 s) → PATCH location do novo → rolo anterior desse extrusor vai para o
+ * Armazém. `uid` (opcional): o CARD_UID do detector só invalida se vier com
+ * OUTRO UID. Mostra cada falha na tela e no Diário. */
+static bool link_channel(const char *ip, uint16_t port, int ch, int id, const char *uid,
+                         const char *not_confirmed_fmt) {
+    char err[160] = {0};
+    {
+        char m[96]; snprintf(m, sizeof(m), S_NFC_LINKING, id, ch + 1);
+        act_set(AR_RUNNING, m);
+    }
+    const int sent = u1_set_spool_id(ip, port, ch, id, err, sizeof(err));
+    if (sent == 0) {
+        char m[200]; snprintf(m, sizeof(m), S_NFC_LINK_FAILED, ch + 1, err[0] ? err : "?");
+        history_add(m);
+        act_set(AR_ERR, m);
         return false;
     }
-    if (strcmp(saved.location, loc) != 0) {
-        snprintf(err, errn, "local ficou \"%s\"", saved.location);
+    if (sent < 0) {
+        char h[200]; snprintf(h, sizeof(h), "SET_SPOOL_ID T%d sem resposta (%s); conferindo", ch + 1, err);
+        history_add(h);
+    }
+    act_set(AR_RUNNING, S_NFC_CONFIRMING);
+    FeederInfo f{};
+    const uint32_t verifying = millis();
+    unsigned confirmed = 0;
+    while (millis() - verifying < 20000) {
+        char observed[21]{};
+        err[0] = 0;
+        if (parse_feeder_fresh(&f, err, sizeof(err), ip, port, ch, uid ? observed : nullptr) &&
+            f.ch[ch].filament_detected && f.ch[ch].spool_id == id &&
+            (!uid || !observed[0] || !strcmp(uid, observed))) {
+            if (++confirmed == 4) break;
+        } else confirmed = 0;
+        vTaskDelay(pdMS_TO_TICKS(750));
+    }
+    if (confirmed < 4) {
+        char m[160];
+        snprintf(m, sizeof(m), not_confirmed_fmt, id, ch + 1);
+        history_add(m);
+        act_set(AR_ERR, m);
         return false;
     }
-    xSemaphoreTake(mutex, portMAX_DELAY);
-    g_act.saved = saved;
-    xSemaphoreGive(mutex);
-    return true;
+    char idn[96];
+    {
+        WarehouseSpool *sp = (WarehouseSpool *)psram_z(sizeof(WarehouseSpool));
+        if (sp && get_spool_copy(id, sp)) snprintf(idn, sizeof(idn), "#%d · %s %s · %s", id, sp->info.vendor, sp->info.material, sp->info.name);
+        else snprintf(idn, sizeof(idn), "#%d", id);
+        free(sp);
+    }
+    /* Local no Spoolman (via proxy do Moonraker; a placa não alcança o Spoolman na Tailscale). */
+    act_set(AR_RUNNING, S_NFC_LOCATION_SAVING);
+    err[0] = 0;
+    if (!spoolman_set_u1_location(ip, port, id, ch, err, sizeof(err))) {
+        char m[200]; snprintf(m, sizeof(m), S_NFC_LOCATION_FAILED, ch + 1, err[0] ? err : "?");
+        history_add(m);
+        act_set(AR_ERR, m, id);
+        do_refresh(true);
+        return false;
+    }
+    err[0] = 0;
+    const int moved = release_previous_location(ip, port, ch, id, err, sizeof(err));
+    char message[200];
+    snprintf(message, sizeof(message), S_NFC_LINKED_SAVED, ch + 1, idn);
+    history_add(message);
+    if (moved < 0) {
+        char w[200]; snprintf(w, sizeof(w), S_LINK_PREVIOUS_FAILED, ch + 1, err[0] ? err : "?");
+        history_add(w);
+        act_set(AR_ERR, w, id);
+    } else {
+        act_set(AR_OK, message, id);
+    }
+    do_refresh(true);
+    return moved >= 0;
 }
 
 static void do_nfc_auto(int id, const char *request_uid) {
@@ -1359,62 +1514,8 @@ static void do_nfc_auto(int id, const char *request_uid) {
         snprintf(h, sizeof(h), "filament_detect/set T%d: %s", ch + 1, err[0] ? err : "?");
         history_add(h);
     }
-    err[0] = 0;
     /* Vínculo extrusor → rolo de verdade: SET_SPOOL_ID (SpoolLink). */
-    {
-        char m[96]; snprintf(m, sizeof(m), S_NFC_LINKING, id, ch + 1);
-        act_set(AR_RUNNING, m);
-    }
-    if (!u1_set_spool_id(ip, port, ch, id, err, sizeof(err))) {
-        char m[160]; snprintf(m, sizeof(m), S_NFC_LINK_FAILED, ch + 1, err[0] ? err : "?");
-        history_add(m);
-        act_set(AR_ERR, m);
-        return;
-    }
-    // Spec v1: 4 leituras seguidas em até 20 s. O critério é filament_spool_id[ch] == id;
-    // o CARD_UID do detector só invalida se vier preenchido com OUTRO UID
-    // (o SpoolLink pode reescrever o info com CARD_UID vazio).
-    act_set(AR_RUNNING, S_NFC_CONFIRMING);
-    const uint32_t verifying = millis();
-    unsigned confirmed = 0;
-    while (millis() - verifying < 20000) {
-        char observed[21]{};
-        if (parse_feeder_fresh(&f, err, sizeof(err), ip, port, ch, observed) &&
-            f.ch[ch].filament_detected && f.ch[ch].spool_id == id &&
-            (!observed[0] || !strcmp(uid, observed))) {
-            if (++confirmed == 4) break;
-        } else confirmed = 0;
-        vTaskDelay(pdMS_TO_TICKS(750));
-    }
-    if (confirmed < 4) {
-        char m[140];
-        snprintf(m, sizeof(m), S_NFC_LINK_NOT_CONFIRMED, id, ch + 1);
-        history_add(m);
-        act_set(AR_ERR, m);
-        return;
-    }
-    char idn[96];
-    {
-        WarehouseSpool *sp = (WarehouseSpool *)psram_z(sizeof(WarehouseSpool));
-        if (sp && get_spool_copy(id, sp)) snprintf(idn, sizeof(idn), "#%d · %s %s · %s", id, sp->info.vendor, sp->info.material, sp->info.name);
-        else snprintf(idn, sizeof(idn), "#%d", id);
-        free(sp);
-    }
-    /* Local no Spoolman (via proxy do Moonraker; a placa não alcança o Spoolman na Tailscale). */
-    act_set(AR_RUNNING, S_NFC_LOCATION_SAVING);
-    err[0] = 0;
-    if (!spoolman_set_u1_location(ip, port, id, ch, err, sizeof(err))) {
-        char m[160]; snprintf(m, sizeof(m), S_NFC_LOCATION_FAILED, ch + 1, err[0] ? err : "?");
-        history_add(m);
-        act_set(AR_ERR, m, id);
-        do_refresh(true);
-        return;
-    }
-    char message[160];
-    snprintf(message, sizeof(message), S_NFC_LINKED_SAVED, ch + 1, idn);
-    history_add(message);
-    act_set(AR_OK, message, id);
-    do_refresh(true);
+    link_channel(ip, port, ch, id, uid, S_NFC_LINK_NOT_CONFIRMED);
 }
 
 static void do_feed(int ch, bool load) {

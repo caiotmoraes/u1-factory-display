@@ -74,8 +74,15 @@ bool spoollink_set_spool_script(int channel, int spool_id, char *out, size_t n);
 bool url_encode_component(const char *in, char *out, size_t n);
 /* Local do rolo no Spoolman: "Snapmaker U1 - Extrusor N" (N = channel + 1). */
 bool spool_u1_location(int channel, char *out, size_t n);
+/* Local gravado no rolo que sai de um extrusor (U1 Spool Spec v1). */
+#define SPOOL_STORED_LOCATION "Armazém"
 /* Corpo do PATCH: {"location":"..."} com escape JSON de aspas, barra e controle. */
 bool spool_location_patch_json(const char *location, char *out, size_t n);
+/* GET pelo proxy: "/v1/spool?location=<local do extrusor, percent-encoded>". */
+bool spool_channel_location_query(int channel, char *out, size_t n);
+/* Rolo anterior do extrusor: true se `location` é exatamente o local desse
+ * canal e o rolo não é o recém-vinculado (o filtro do Spoolman é parcial). */
+bool spool_should_release(int spool_id, const char *location, int channel, int new_id);
 
 /* Qual spool_id o HUD deve mostrar: o do extrusor ativo em
  * print_task_config.filament_spool_id, NÃO o spool_id global do

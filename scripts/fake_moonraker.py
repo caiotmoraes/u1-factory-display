@@ -278,7 +278,13 @@ class Handler(BaseHTTPRequestHandler):
 
             # list
             if method == "GET" and (p.startswith("/v1/spool?") or p == "/v1/spool"):
-                return v2(list(SPOOL.values()))
+                q = parse_qs(urlsplit(p).query, keep_blank_values=True)
+                rows = list(SPOOL.values())
+                if "location" in q:
+                    # Spoolman: busca parcial, sem diferenciar maiúsculas.
+                    term = q["location"][0].lower()
+                    rows = [s for s in rows if term in (s.get("location") or "").lower()]
+                return v2(rows)
             if method == "GET" and p == "/v1/vendor":
                 return v2(list(VENDORS.values()))
             if method == "GET" and p == "/v1/filament":
