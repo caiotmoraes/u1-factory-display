@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Sobe o FakeMoonraker, exercita os endpoints que o firmware usa e valida o JSON."""
-import json, subprocess, sys, time, urllib.request, urllib.error
+import json, os, subprocess, sys, time, urllib.parse, urllib.request, urllib.error
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -22,6 +22,72 @@ def post(path, body):
                                  headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=2) as r:
         return json.load(r)
+
+def post_raw(path, data=b""):
+    """POST como o firmware no SET_SPOOL_ID: script na query, corpo vazio.
+    Retorna (status, json)."""
+    req = urllib.request.Request(f"http://127.0.0.1:{PORT}{path}", data=data, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=2) as r:
+            return r.status, json.load(r)
+    except urllib.error.HTTPError as e:
+        return e.code, json.load(e)
+
+def link_requests(ch, sid):
+    """Pedidos montados pelas funções do firmware (tests/link_request.cpp)."""
+    exe = os.environ.get("LINK_REQUEST")
+    if exe and os.path.exists(exe):
+        out = subprocess.check_output([exe, str(ch), str(sid)], text=True).splitlines()
+        return out[0], out[1], out[2]
+    script = f"SET_SPOOL_ID CHANNEL={ch} SPOOL_ID={sid}"
+    return ("/printer/gcode/script?script=" + urllib.parse.quote(script, safe=""),
+            f"/v1/spool/{sid}", json.dumps({"location": f"Snapmaker U1 - Extrusor {ch + 1}"},
+                                           separators=(",", ":")))
+
+def check_set_spool_link():
+    """Bug 2026-11-18: ler NFC > inserir no T2 não gravava filament_spool_id nem o local."""
+    cfg = lambda **kw: post("/_fake/config", kw)
+    cfg(spool_ids=[40, 0, 0, 0], detected=[None, True, None, None], gcode_log=[],
+        detect_log=[], patch_log=[], fail_set_spool="", fail_spoolman_patch="")
+    # 1) filament_detect/set sozinho NÃO vincula (reproduz a U1 real)
+    r = post("/printer/filament_detect/set", {"channel": 1,
+             "info": {"CARD_TYPE": "NTAG", "CARD_UID": [0x53, 0x25, 0x28, 0xB5, 0x14, 0x00, 0x01]}})
+    assert r["result"] == "ok", r
+    ids = get("/printer/objects/query?print_task_config")["result"]["status"]["print_task_config"]["filament_spool_id"]
+    assert ids == [40, 0, 0, 0], ids
+    # 2) SET_SPOOL_ID exato, canal 0-based, na query string
+    gpath, ppath, pbody = link_requests(1, 41)
+    assert gpath == "/printer/gcode/script?script=SET_SPOOL_ID%20CHANNEL%3D1%20SPOOL_ID%3D41", gpath
+    code, r = post_raw(gpath)
+    assert code == 200 and r.get("result") == "ok", (code, r)
+    log = get("/_fake/state")["gcode_log"][-1]
+    assert log["script"] == "SET_SPOOL_ID CHANNEL=1 SPOOL_ID=41" and log["source"] == "query", log
+    ids = get("/printer/objects/query?print_task_config")["result"]["status"]["print_task_config"]["filament_spool_id"]
+    assert ids == [40, 41, 0, 0], ids
+    # T4 = CHANNEL=3
+    g4, _, b4 = link_requests(3, 40)
+    assert g4.endswith("SET_SPOOL_ID%20CHANNEL%3D3%20SPOOL_ID%3D40"), g4
+    assert json.loads(b4) == {"location": "Snapmaker U1 - Extrusor 4"}, b4
+    # 3) PATCH do local pelo proxy, corpo exato
+    assert ppath == "/v1/spool/41" and pbody == '{"location":"Snapmaker U1 - Extrusor 2"}', (ppath, pbody)
+    pr = post("/server/spoolman/proxy", {"request_method": "PATCH", "path": ppath,
+                                         "use_v2_response": True, "body": json.loads(pbody)})
+    assert pr["result"]["response"]["location"] == "Snapmaker U1 - Extrusor 2", pr
+    pl = get("/_fake/state")["patch_log"][-1]
+    assert pl["path"] == "/v1/spool/41" and pl["body"] == {"location": "Snapmaker U1 - Extrusor 2"}, pl
+    # 4) caminhos de erro: canal inválido, SpoolLink recusa, Spoolman recusa
+    code, r = post_raw("/printer/gcode/script?script=" + urllib.parse.quote("SET_SPOOL_ID CHANNEL=4 SPOOL_ID=41", safe=""))
+    assert code == 400 and "CHANNEL" in r["error"]["message"], (code, r)
+    cfg(fail_set_spool="SpoolLink: spool #99 not found")
+    code, r = post_raw(link_requests(2, 99)[0])
+    assert code == 400 and r["error"]["message"] == "SpoolLink: spool #99 not found", (code, r)
+    ids = get("/printer/objects/query?print_task_config")["result"]["status"]["print_task_config"]["filament_spool_id"]
+    assert ids == [40, 41, 0, 0], ids
+    cfg(fail_set_spool="", fail_spoolman_patch="Spoolman offline")
+    pr = post("/server/spoolman/proxy", {"request_method": "PATCH", "path": "/v1/spool/41",
+                                         "use_v2_response": True, "body": pbody})
+    assert pr["result"]["response"] is None and pr["result"]["error"]["message"] == "Spoolman offline", pr
+    cfg(fail_spoolman_patch="", detected=[None, None, None, None], spool_ids=[40, 0, 0, 0])
 
 def main():
     proc = subprocess.Popen(
@@ -120,6 +186,8 @@ def main():
 
         gc = post("/printer/gcode/script", {"script": "AUTO_FEEDING EXTRUDER=0 LOAD=1"})
         assert gc.get("result") == "ok", gc
+
+        check_set_spool_link()
 
         created = post("/server/spoolman/proxy", {
             "request_method": "POST", "path": "/v1/spool", "use_v2_response": True,

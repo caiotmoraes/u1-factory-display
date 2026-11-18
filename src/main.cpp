@@ -59,7 +59,7 @@ void setup() {
     Serial.setDebugOutput(true);
     delay(200);
     Serial.println();
-    Serial.println("=== U1 Factory Display  v0.7.0  (Waveshare ESP32-S3-Touch-LCD-7) ===");
+    Serial.println("=== U1 Factory Display  v0.7.1  (Waveshare ESP32-S3-Touch-LCD-7) ===");
 
     Serial.println("[board] init");
     Board *board = new Board();

@@ -95,6 +95,13 @@ bool spool_parse_active_id(const char *json, size_t len, int *id, bool *spoolman
  * Usa filtro ArduinoJson para não materializar o documento inteiro. */
 int settings_parse_rfid_mode(const char *json, size_t len);
 
+/* Resposta de POST /printer/gcode/script (ou outro endpoint Moonraker).
+ * Retorna true se o corpo traz erro: {"error":{"code":400,"message":"..."}},
+ * {"error":"..."} ou {"result":{"error":...}}; copia a mensagem para `msg`.
+ * Retorna false se o corpo é sucesso ({"result":"ok"}) ou vazio. Corpo não-JSON
+ * conta como erro ("Resposta inválida da U1"). */
+bool moonraker_error_message(const char *json, size_t len, char *msg, size_t n);
+
 #ifdef __cplusplus
 }
 #endif

@@ -902,7 +902,7 @@ static void settings_refresh(void) {
              state_text(s->state, s->cancelled),
              s->moonraker_ok ? "conectado" : s->discovering ? "procurando…" : "sem conexão");
     lv_label_set_text(set_u1, t);
-    snprintf(t, sizeof(t), "U1 Factory Display v0.7.0 · U1 Spool Spec v1\nRAM interna livre: %u KB\nPSRAM livre: %u KB",
+    snprintf(t, sizeof(t), "U1 Factory Display v0.7.1 · U1 Spool Spec v1\nRAM interna livre: %u KB\nPSRAM livre: %u KB",
              (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
              (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
     lv_label_set_text(set_about, t);

@@ -28,6 +28,7 @@ Aceita lista de inteiros 0–255 **ou** string de inteiros decimais separados po
 | Spoolman | padrão `POST :7125/server/spoolman/proxy {"request_method","path":"/v1/…","body"?,"use_v2_response":true}` → `result.response`; opcional no app: Spoolman direto (`/api/v1/…`, `X-Api-Key`) |
 | Ativar no alimentador | `POST /printer/spoollink/set {channel, info:{…, CARD_UID:[]}, message}` |
 | Injetar UID | `POST /printer/filament_detect/set {channel, info:{CARD_UID:[bytes], CARD_TYPE:"M1"|"NTAG"}}` |
+| Vincular extrusor → rolo (SpoolLink) | `POST /printer/gcode/script?script=SET_SPOOL_ID%20CHANNEL%3D<0..3>%20SPOOL_ID%3D<id>` (canal 0-based, corpo vazio); confirmar `print_task_config.filament_spool_id[ch]`; depois `PATCH /v1/spool/<id> {"location":"Snapmaker U1 - Extrusor N"}` |
 | Carregar/retirar | `AUTO_FEEDING EXTRUDER=n LOAD=1/UNLOAD=1`, timeout HTTP **240 s**, sem repetir; confirmar por `channel_state` |
 | Ventiladores | `SET_FAN_SPEED FAN=exhaust_fan|circulation_fan|cavity_fan SPEED=0..1`; peça `M106 S0..255` / `M107` |
 | Impressão | `PAUSE`, `RESUME`, `CANCEL_PRINT` (via `/printer/print/pause|resume|cancel`); emergência `POST /printer/emergency_stop` |

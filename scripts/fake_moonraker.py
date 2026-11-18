@@ -4,7 +4,8 @@ Uso: python3 scripts/fake_moonraker.py [--port 7125] [--scenario printing]
 Cenários: idle, heating, printing, paused, complete, error, low_spool, change_spool
 """
 from __future__ import annotations
-import argparse, json, threading, time
+import argparse, json, re, threading, time
+from urllib.parse import parse_qs, urlsplit
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 SCENARIO = "printing"
@@ -79,6 +80,16 @@ def objects(scenario: str) -> dict:
         base["webhooks"]["state"] = "ready"
     elif scenario == "idle":
         pass
+    # Estado mutável (SET_SPOOL_ID, filament_detect/set, inserção simulada).
+    base["print_task_config"]["filament_spool_id"] = list(STATE["spool_ids"])
+    for i, det in enumerate(STATE["detected"]):
+        side = "filament_feed left" if i < 2 else "filament_feed right"
+        ex = base[side]["extruder%d" % i]
+        if det is not None:
+            ex["filament_detected"] = det
+            if det:
+                ex["channel_state"] = "preload_finish"
+    base["filament_detect"]["info"] = [dict(x) for x in STATE["detect_info"]]
     return {"result": {"status": base, "eventtime": 0}}
 
 SPOOL = {
@@ -128,6 +139,20 @@ NEXT_ID = {"spool": 43, "vendor": 3, "filament": 3}
 LAST_SPOOLINK = None
 LAST_GCODE = None
 RFID_MODE = "openrfid"
+# Estado observável pelos testes (GET /_fake/state, POST /_fake/config).
+# Como na U1 real (paxx + SpoolLink, 2026-11-18): filament_detect/set só põe o
+# UID no detector; quem grava filament_spool_id é o SET_SPOOL_ID.
+STATE = {
+    "spool_ids": [40, 0, 0, 0],
+    "detected": [None, None, None, None],   # None = usa o cenário
+    "detect_info": [{"CARD_UID": []} for _ in range(4)],
+    "gcode_log": [],     # {"script", "source": "query"|"body", "raw_query"}
+    "detect_log": [],
+    "patch_log": [],     # {"path", "body" (texto cru)}
+    "fail_set_spool": "",      # mensagem de erro do SpoolLink (HTTP 400)
+    "fail_spoolman_patch": "", # mensagem de erro do Spoolman (v2 error)
+}
+SET_SPOOL_RE = re.compile(r"^SET_SPOOL_ID CHANNEL=(-?\d+) SPOOL_ID=(-?\d+)$")
 SETTINGS_PAD = 30066
 
 class Handler(BaseHTTPRequestHandler):
@@ -146,6 +171,8 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?", 1)[0]
         if path == "/printer/info":
             return self._json({"result": {"state": "ready", "hostname": "lava"}})
+        if path == "/_fake/state":
+            return self._json(STATE)
         if path == "/printer/objects/query":
             obj = objects(SCENARIO)
             if REMOTE_JOB is not None:
@@ -192,13 +219,42 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/printer/emergency_stop":
             SCENARIO = "error"
             return self._json({"result": "ok"})
+        if path == "/_fake/config":
+            for k, v in body.items():
+                if k in STATE:
+                    STATE[k] = v
+            return self._json({"result": "ok"})
+        if path == "/printer/filament_detect/set":
+            ch = body.get("channel")
+            if not isinstance(ch, int) or not 0 <= ch <= 3:
+                return self._json({"error": {"code": 400, "message": "invalid channel"}}, 400)
+            STATE["detect_log"].append(body)
+            STATE["detect_info"][ch] = dict(body.get("info") or {})
+            return self._json({"result": "ok"})
         if path == "/printer/spoollink/set":
             global LAST_SPOOLINK
             LAST_SPOOLINK = body
             return self._json({"result": "ok"})
         if path == "/printer/gcode/script":
             global LAST_GCODE
-            LAST_GCODE = body.get("script", "")
+            raw_query = urlsplit(self.path).query
+            q = parse_qs(raw_query, keep_blank_values=True)
+            if "script" in q:
+                script, source = q["script"][0], "query"
+            else:
+                script, source = body.get("script", ""), "body"
+            LAST_GCODE = script
+            STATE["gcode_log"].append({"script": script, "source": source, "raw_query": raw_query})
+            if script.split(" ", 1)[0] == "SET_SPOOL_ID":
+                m = SET_SPOOL_RE.match(script)
+                if not m:
+                    return self._json({"error": {"code": 400, "message": "Malformed command '%s'" % script}}, 400)
+                ch, sid = int(m.group(1)), int(m.group(2))
+                if not 0 <= ch <= 3:
+                    return self._json({"error": {"code": 400, "message": "SpoolLink: CHANNEL must be 0-3"}}, 400)
+                if STATE["fail_set_spool"]:
+                    return self._json({"error": {"code": 400, "message": STATE["fail_set_spool"]}}, 400)
+                STATE["spool_ids"][ch] = sid
             return self._json({"result": "ok"})
         if path == "/server/spoolman/proxy":
             method = (body.get("request_method") or "GET").upper()
@@ -275,6 +331,9 @@ class Handler(BaseHTTPRequestHandler):
                         return v2(None, err)
                     return v2(spool)
                 if method == "PATCH":
+                    STATE["patch_log"].append({"path": p, "body": body.get("body")})
+                    if STATE["fail_spoolman_patch"]:
+                        return v2(None, {"status_code": 500, "message": STATE["fail_spoolman_patch"]})
                     if not spool:
                         return v2(None, {"message": f"No spool with ID {sid}"})
                     for k in ("location", "comment", "remaining_weight", "extra"):

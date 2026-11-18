@@ -356,6 +356,45 @@ int main(void) {
         ok("hud-key-muda", hud_mapping_key(ids) != hud_mapping_key(ids2));
     }
 
+    /* ---- SET_SPOOL_ID + local no Spoolman (bug 2026-11-18) ---- */
+    {
+        char b[96], e[160];
+        ok("setspool-T2", spoollink_set_spool_script(1, 15, b, sizeof(b)) &&
+                          !strcmp(b, "SET_SPOOL_ID CHANNEL=1 SPOOL_ID=15"));
+        ok("setspool-T4", spoollink_set_spool_script(3, 12, b, sizeof(b)) &&
+                          !strcmp(b, "SET_SPOOL_ID CHANNEL=3 SPOOL_ID=12"));
+        ok("setspool-T1-0based", spoollink_set_spool_script(0, 13, b, sizeof(b)) &&
+                                 !strcmp(b, "SET_SPOOL_ID CHANNEL=0 SPOOL_ID=13"));
+        ok("setspool-canal-4", !spoollink_set_spool_script(4, 15, b, sizeof(b)) && !b[0]);
+        ok("setspool-canal-neg", !spoollink_set_spool_script(-1, 15, b, sizeof(b)));
+        ok("setspool-id-0", !spoollink_set_spool_script(1, 0, b, sizeof(b)));
+        ok("setspool-buf", !spoollink_set_spool_script(1, 15, b, 10));
+        ok("urlenc-script", url_encode_component("SET_SPOOL_ID CHANNEL=1 SPOOL_ID=15", e, sizeof(e)) &&
+                            !strcmp(e, "SET_SPOOL_ID%20CHANNEL%3D1%20SPOOL_ID%3D15"));
+        ok("urlenc-reservados", url_encode_component("a&b?c#d+é", e, sizeof(e)) &&
+                                !strcmp(e, "a%26b%3Fc%23d%2B%C3%A9"));
+        ok("urlenc-buf", !url_encode_component("SET_SPOOL_ID CHANNEL=1", e, 12) && !e[0]);
+        ok("loc-T2", spool_u1_location(1, b, sizeof(b)) && !strcmp(b, "Snapmaker U1 - Extrusor 2"));
+        ok("loc-T4", spool_u1_location(3, b, sizeof(b)) && !strcmp(b, "Snapmaker U1 - Extrusor 4"));
+        ok("loc-canal-4", !spool_u1_location(4, b, sizeof(b)));
+        ok("patch-json", spool_location_patch_json("Snapmaker U1 - Extrusor 2", e, sizeof(e)) &&
+                         !strcmp(e, "{\"location\":\"Snapmaker U1 - Extrusor 2\"}"));
+        ok("patch-json-escape", spool_location_patch_json("Arm\xc3\xa1rio \"A\"\\1\n", e, sizeof(e)) &&
+                                !strcmp(e, "{\"location\":\"Arm\xc3\xa1rio \\\"A\\\"\\\\1\\u000a\"}"));
+        ok("patch-json-buf", !spool_location_patch_json("Snapmaker U1 - Extrusor 2", e, 20));
+        const char *ok_body = "{\"result\":\"ok\"}";
+        ok("mr-ok", !moonraker_error_message(ok_body, strlen(ok_body), e, sizeof(e)));
+        ok("mr-vazio", !moonraker_error_message("", 0, e, sizeof(e)));
+        const char *eb = "{\"error\":{\"code\":400,\"message\":\"Unknown command:\\\"SET_SPOOL_ID\\\"\",\"traceback\":\"\"}}";
+        ok("mr-erro-obj", moonraker_error_message(eb, strlen(eb), e, sizeof(e)) &&
+                          !strcmp(e, "Unknown command:\"SET_SPOOL_ID\""));
+        const char *es = "{\"error\":\"bad json\"}";
+        ok("mr-erro-str", moonraker_error_message(es, strlen(es), e, sizeof(e)) && !strcmp(e, "bad json"));
+        const char *er = "{\"result\":{\"error\":{\"message\":\"x\"}}}";
+        ok("mr-erro-result", moonraker_error_message(er, strlen(er), e, sizeof(e)) && !strcmp(e, "x"));
+        ok("mr-html", moonraker_error_message("<html>502</html>", 16, e, sizeof(e)) && e[0]);
+    }
+
     printf(fails ? "\n%d FALHA(S)\n" : "\nTodos os testes de spool/filtro passaram.\n", fails);
     return fails ? 1 : 0;
 }

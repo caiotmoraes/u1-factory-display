@@ -65,6 +65,18 @@ const char *history_event_label_pt(const char *type);
  * Retorna true se o rolo tem material e cor válidos. */
 bool spool_build_link_info(const WarehouseSpool *s, char *json, size_t n, char *err, size_t en);
 
+/* Vínculo extrusor → rolo no SpoolLink da U1 (fix 2026-11-18).
+ * Script G-code "SET_SPOOL_ID CHANNEL=<0..3> SPOOL_ID=<id>" (CHANNEL 0-based).
+ * false se canal fora de 0..3, id <= 0 ou buffer pequeno. */
+bool spoollink_set_spool_script(int channel, int spool_id, char *out, size_t n);
+/* Percent-encoding RFC 3986 para query string (só A-Z a-z 0-9 - _ . ~ passam;
+ * espaço vira %20, '=' vira %3D). false se não couber em `out`. */
+bool url_encode_component(const char *in, char *out, size_t n);
+/* Local do rolo no Spoolman: "Snapmaker U1 - Extrusor N" (N = channel + 1). */
+bool spool_u1_location(int channel, char *out, size_t n);
+/* Corpo do PATCH: {"location":"..."} com escape JSON de aspas, barra e controle. */
+bool spool_location_patch_json(const char *location, char *out, size_t n);
+
 /* Qual spool_id o HUD deve mostrar: o do extrusor ativo em
  * print_task_config.filament_spool_id, NÃO o spool_id global do
  * plugin Moonraker (que na U1 costuma ser null mesmo com rolos associados). */

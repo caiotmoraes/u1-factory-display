@@ -59,6 +59,23 @@ ESP32_IO_Expander 1.1.0, esp-lib-utils 0.2.0, LVGL 8.4.0, ArduinoJson 7.
 Macros da placa: `-DESP_PANEL_BOARD_DEFAULT_USE_SUPPORTED=1
 -DBOARD_WAVESHARE_ESP32_S3_TOUCH_LCD_7`. CDC nativo no boot ligado e UART0 reservada ao PN532. O CH343 continua sendo a porta de gravação.
 
+## O que esta versão faz (v0.7.1) — vínculo extrusor → rolo no fluxo NFC
+
+Correção do teste de 18/11/2026 (ler tag > inserir): o rolo aparecia na tela da
+U1, mas `print_task_config.filament_spool_id` ficava 0 e o Spoolman não recebia
+consumo nem local. Causa: o fluxo só chamava `POST /printer/filament_detect/set`
+(injeta o UID no detector) e esperava a U1 resolver o `spool_id` sozinha; o
+SpoolLink só grava o vínculo com `SET_SPOOL_ID`. Depois de identificar o
+alimentador, o firmware agora:
+
+1. `POST /printer/gcode/script?script=SET_SPOOL_ID%20CHANNEL%3D<0..3>%20SPOOL_ID%3D<id>`
+   (canal 0-based, script na query string, corpo vazio); confere HTTP e o
+   `error.message` do Moonraker.
+2. Confirma `filament_spool_id[ch] == id` (4 leituras seguidas, até 20 s).
+3. `PATCH /v1/spool/<id>` `{"location":"Snapmaker U1 - Extrusor N"}` pelo proxy
+   Spoolman do Moonraker (N = 1..4) e confere o local salvo.
+4. Mostra sucesso ou o erro exato na tela e no Diário (nada falha calado).
+
 ## O que esta versão faz (v0.7.0) — unificação com o Spool Factory 2.0
 Tela e app Android seguem a mesma especificação, **U1 Spool Spec v1** (pasta `spec/`, idêntica nos dois repositórios).
 - **`card_uids` canônico:** grava sempre `"\"A,B\""` (hex maiúsculo, sem duplicatas). Ao associar uma tag, listas JSON e textos legados são migrados; UIDs inválidos ficam no fim e aparecem na ficha como "Tag inválida no cadastro". `tags[].uid` não é copiado.

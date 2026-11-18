@@ -31,6 +31,12 @@ else
       "$ROOT/tests/test_spec_fixtures.cpp" "$ROOT/src/spool_parse.cpp" \
       -o /tmp/test_spec_fixtures
   /tmp/test_spec_fixtures "$ROOT/spec/fixtures/uids.json"
+  echo
+  echo "== pedidos SET_SPOOL_ID / PATCH location (host C++) =="
+  "$GXX" -std=c++17 -Wall -Wextra -Werror -I "$ROOT/src" \
+      -I "$AJ" "$ROOT/tests/link_request.cpp" "$ROOT/src/inventory_logic.cpp" "$ROOT/src/spool_parse.cpp" \
+      -o /tmp/link_request
+  LINK_REQUEST=/tmp/link_request; export LINK_REQUEST
 fi
 echo
 echo "== protocolo Moonraker / Spoolman (FakeMoonraker) =="

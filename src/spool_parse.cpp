@@ -553,3 +553,26 @@ int settings_parse_rfid_mode(const char *json, size_t len) {
     return settings_scan_groups(root);
 }
 
+
+bool moonraker_error_message(const char *json, size_t len, char *msg, size_t n) {
+    if (msg && n) msg[0] = 0;
+    if (!json || len == 0) return false;
+    size_t i = 0;
+    while (i < len && isspace((unsigned char)json[i])) ++i;
+    if (i == len) return false;
+    JsonDocument doc = SPOOL_DOC();
+    if (deserializeJson(doc, json, len)) {
+        if (msg && n) { strncpy(msg, "Resposta inválida da U1", n - 1); msg[n - 1] = 0; }
+        return true;
+    }
+    JsonVariant e = doc["error"];
+    if (e.isNull() && doc["result"].is<JsonObject>()) e = doc["result"]["error"];
+    if (e.isNull()) return false;
+    const char *m = "";
+    if (e.is<JsonObject>()) m = e["message"] | e["error"] | "";
+    else if (e.is<const char *>()) m = e.as<const char *>();
+    else if (e.is<bool>() && !e.as<bool>()) return false;
+    if (!m || !m[0] || !strcmp(m, "null")) m = "Erro sem mensagem da U1";
+    if (msg && n) { strncpy(msg, m, n - 1); msg[n - 1] = 0; }
+    return true;
+}

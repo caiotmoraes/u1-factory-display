@@ -402,3 +402,72 @@ int hud_active_spool_id(const int filament_spool_id[4], int active_extruder) {
     int id = filament_spool_id[active_extruder];
     return id > 0 ? id : 0;
 }
+
+/* ---- Vínculo SET_SPOOL_ID + local no Spoolman (fix 2026-11-18) ---- */
+bool spoollink_set_spool_script(int channel, int spool_id, char *out, size_t n) {
+    if (!out || n == 0) return false;
+    out[0] = 0;
+    if (channel < 0 || channel > 3 || spool_id <= 0) return false;
+    int w = snprintf(out, n, "SET_SPOOL_ID CHANNEL=%d SPOOL_ID=%d", channel, spool_id);
+    if (w < 0 || (size_t)w >= n) { out[0] = 0; return false; }
+    return true;
+}
+
+bool url_encode_component(const char *in, char *out, size_t n) {
+    static const char hex[] = "0123456789ABCDEF";
+    if (!out || n == 0) return false;
+    out[0] = 0;
+    if (!in) return true;
+    size_t k = 0;
+    for (const unsigned char *p = (const unsigned char *)in; *p; ++p) {
+        const unsigned char c = *p;
+        const bool plain = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                           (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' || c == '~';
+        if (plain) {
+            if (k + 1 >= n) { out[0] = 0; return false; }
+            out[k++] = (char)c;
+        } else {
+            if (k + 3 >= n) { out[0] = 0; return false; }
+            out[k++] = '%';
+            out[k++] = hex[c >> 4];
+            out[k++] = hex[c & 15];
+        }
+    }
+    out[k] = 0;
+    return true;
+}
+
+bool spool_u1_location(int channel, char *out, size_t n) {
+    if (!out || n == 0) return false;
+    out[0] = 0;
+    if (channel < 0 || channel > 3) return false;
+    int w = snprintf(out, n, "Snapmaker U1 - Extrusor %d", channel + 1);
+    if (w < 0 || (size_t)w >= n) { out[0] = 0; return false; }
+    return true;
+}
+
+bool spool_location_patch_json(const char *location, char *out, size_t n) {
+    if (!out || n == 0) return false;
+    out[0] = 0;
+    static const char head[] = "{\"location\":\"";
+    size_t k = 0;
+    for (const char *h = head; *h; ++h) {
+        if (k + 1 >= n) { out[0] = 0; return false; }
+        out[k++] = *h;
+    }
+    for (const unsigned char *p = (const unsigned char *)(location ? location : ""); *p; ++p) {
+        char esc[8] = {0};
+        if (*p == '"' || *p == '\\') { esc[0] = '\\'; esc[1] = (char)*p; }
+        else if (*p < 0x20) snprintf(esc, sizeof(esc), "\\u%04x", *p);
+        else esc[0] = (char)*p;
+        for (const char *e = esc; *e; ++e) {
+            if (k + 1 >= n) { out[0] = 0; return false; }
+            out[k++] = *e;
+        }
+    }
+    if (k + 3 > n) { out[0] = 0; return false; }
+    out[k++] = '"';
+    out[k++] = '}';
+    out[k] = 0;
+    return true;
+}
